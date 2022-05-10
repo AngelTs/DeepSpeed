@@ -309,7 +309,7 @@ class MegatronSDLoader(SDLoaderBase):
                          quantize_bits=8,
                          groups=64,
                          mlp_extra_grouping=True):
-        self.sanity_check(self.ckpt_list[0])
+        #self.sanity_check(self.ckpt_list[0])
 
         sd_list = self.get_merge_state_dicts(mp_world_size, mp_rank)
         ds_sd = copy.deepcopy(sd_list[0])
@@ -349,7 +349,7 @@ class MegatronSDLoader(SDLoaderBase):
                         new_client_sd[key] = self.merge_query_key_value(
                             value_list,
                             ckpt_ver)
-            elif "mlp.dense_h_to_4h.weight" in key or "word_embeddings.weight" in key or "mlp.dense_h_to_4h.bias" in key:
+            elif "mlp.dense_h_to_4h.weight" in key or "word_embeddings.weight" in key or "mlp.dense_h_to_4h.bias" in key or "final_linear.weight" in key:
                 if quantize and "mlp.dense_h_to_4h.weight" in key:
                     value_list = quantizer.Quantize(value_list,
                                                     quantize_bits,
@@ -428,7 +428,8 @@ class MegatronSDLoader(SDLoaderBase):
             "mlp.dense_4h_to_h.weight",
             "attention.query_key_value",
             "mlp.dense_h_to_4h.weight",
-            "mlp.dense_h_to_4h.bias"
+            "mlp.dense_h_to_4h.bias",
+            "word_embeddings.weight"
         ]
 
         sd = torch.load(ckpt_file_name, map_location=lambda storage, loc: storage)

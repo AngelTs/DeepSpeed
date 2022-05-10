@@ -19,14 +19,17 @@ class InferenceBuilder(CUDAOpBuilder):
             'csrc/transformer/inference/csrc/normalize.cu',
             'csrc/transformer/inference/csrc/softmax.cu',
             'csrc/transformer/inference/csrc/dequantize.cu',
+            'csrc/transformer/inference/csrc/custom_gemm.cu',
+            'csrc/transformer/inference/csrc/transform.cu',
             'csrc/transformer/inference/csrc/apply_rotary_pos_emb.cu',
         ]
 
+
     def extra_ldflags(self):
-        if not self.is_rocm_pytorch():
-            return ['-lcurand']
-        else:
-            return []
+        import deepspeed
+        import os
+        lib_path = os.path.join(os.path.dirname(deepspeed.__file__), 'ops/libs/cutlass')
+        return [f'-L{lib_path}', '-lgemmlib', '-lcurand']
 
     def include_paths(self):
         return ['csrc/transformer/inference/includes']
