@@ -608,7 +608,7 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
                        .device(at::kCUDA)
                        .requires_grad(false);
 
-    auto output = torch::empty(//workspace, 
+    auto output = torch::from_blob(workspace, 
                                     {input.size(0), input.size(1), out_size}, input.options());
 
 

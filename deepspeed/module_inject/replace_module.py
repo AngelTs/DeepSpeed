@@ -36,14 +36,15 @@ class GroupQuantizer:
             return inputs
         q_range = 2 ** self.num_bits
         #self.num_groups = inputs.shape[1] // (self.group_size * count)
+        inputs = inputs.to(torch.cuda.current_device())
         input_flat = inputs.t().contiguous().reshape(self.num_groups, -1).contiguous()
         input_min = torch.min(input_flat, dim=1, keepdim=True)[0].float()
         input_max = torch.max(input_flat, dim=1, keepdim=True)[0].float()
         scale = torch.max(input_min.abs(), input_max.abs()) * 2.0 / (q_range-2)
         input_flat = (input_flat / scale).round().clamp(-q_range // 2 + 1, q_range // 2 - 1)
         inputs_q = input_flat.reshape(inputs.t().shape).to(torch.int8).contiguous()
-        out = torch.nn.Parameter(inputs_q.to(torch.cuda.current_device()), requires_grad=False)
-        out.scale = scale.to(torch.cuda.current_device())
+        out = torch.nn.Parameter(inputs_q, requires_grad=False)
+        out.scale = scale
         return out
 
 class LinearLayer(nn.Module):

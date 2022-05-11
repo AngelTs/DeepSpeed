@@ -236,12 +236,12 @@ class InferenceEngine(Module):
 
         replace_transformer_layer(client_module,
                                   self.module,
-                                  #triangular_masking=self.triangular_masking,
+                                  triangular_masking=self.triangular_masking,
                                   policy=injection_policy,
                                   mp_size=self.mp_world_size,
                                   mp_group=self.mp_group,
-                                  #ep_group=self.ep_group,
-                                  #expert_mp_group=self.expert_mp_group,
+                                  ep_group=self.ep_group,
+                                  expert_mp_group=self.expert_mp_group,
                                   config=self.config,
                                   fp16=(self.dtype == torch.half),
                                   training=False,
@@ -252,10 +252,10 @@ class InferenceEngine(Module):
                                                      self.mlp_extra_grouping,
                                                      self.quantize_groups),
                                   replace_with_kernel_inject=replace_with_kernel_inject,
-                                  #moe=moe,
-                                  #moe_experts=moe_experts,
-                                  #moe_type=moe_type,
-                                  #training_mp_size=training_mp_size
+                                  moe=moe,
+                                  moe_experts=moe_experts,
+                                  moe_type=moe_type,
+                                  training_mp_size=training_mp_size
                                   )
 
     def _get_all_ckpt_names(self, checkpoints_path, tag):
