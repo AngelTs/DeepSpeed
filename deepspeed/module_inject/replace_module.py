@@ -30,8 +30,8 @@ class GroupQuantizer:
         self.group_size = group_size
         self.num_bits = num_bits
         self.q_int8 = q_int8
-    def quantize(self, inputs ,count=1):
-        if not self.q_int8:
+    def quantize(self, inputs, qkv=True, count=1):
+        if not self.q_int8 or not qkv:
             inputs.scale = torch.empty(1)
             return inputs
         q_range = 2 ** self.num_bits
@@ -168,7 +168,8 @@ def replace_transformer_layer(orig_layer_impl,
                               linear_layer_setting=None,
                               moe=False,
                               moe_experts=1,
-                              moe_type='standard'):
+                              moe_type='standard',
+                              enable_qkv_quantization=False):
     """ Replace bert-style transformer layers with DeepSpeed's transformer layer
     Arguments:
         orig_layer_impl (torch.nn.Module): the original transformer layer implementation to look for,
@@ -313,7 +314,8 @@ def replace_transformer_layer(orig_layer_impl,
                                                                'window_size') else 1),
                     rotary_dim=rotary_dim,
                     mlp_after_attn=(rotary_dim is None or rotary_dim < 0),
-                    training_mp_size=training_mp_size)
+                    training_mp_size=training_mp_size,
+                    enable_qkv_quantization=enable_qkv_quantization)
 
             if quantize and quantize_settings is not None:
                 (quantization_scales,
@@ -437,7 +439,7 @@ def replace_transformer_layer(orig_layer_impl,
                 _res_coef.data = transpose(_res_coef.data)
 
             attn_block = new_module.attention
-            attn_block.attn_qkvw = mp_replace.qkv_copy(attn_block.attn_qkvw, qkvw)
+            attn_block.attn_qkvw = quantizer.quantize(mp_replace.qkv_copy(attn_block.attn_qkvw, qkvw), qkv=enable_qkv_quantization)
             attn_block.attn_qkvb = mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
             attn_block.attn_ow = quantizer.quantize(mp_replace.copy(attn_block.attn_ow, dense_w))

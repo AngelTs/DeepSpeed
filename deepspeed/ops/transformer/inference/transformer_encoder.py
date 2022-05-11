@@ -33,7 +33,8 @@ class DeepSpeedEncoderFunction(Function):
                 norm_factor):
         func(input, mask, input_norm, attn_weights, attn_biases, attn_norm, mlp_weights, mlp_biases, 
             config.heads, config.pre_layer_norm, config.epsilon, norm_factor, config.q_int8, 
-            mlp_weights[1].scale, mlp_weights[0].scale, attn_weights[1].scale)
+            mlp_weights[1].scale, mlp_weights[0].scale, attn_weights[1].scale,
+            config.enable_qkv_quantization, attn_weights[0].scale)
 
         if config.return_tuple:
             return (input, )

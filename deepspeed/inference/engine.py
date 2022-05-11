@@ -45,7 +45,8 @@ class InferenceEngine(Module):
                  moe_experts=1,
                  moe_type='standard',
                  config=None,
-                 enable_cuda_graph=True):
+                 enable_cuda_graph=True,
+                 enable_qkv_quantization=False):
         """
         Args:
             model: torch.nn.Module
@@ -126,7 +127,8 @@ class InferenceEngine(Module):
                 moe=moe,
                 moe_experts=moe_experts,
                 moe_type=moe_type,
-                training_mp_size=training_mp_size)
+                training_mp_size=training_mp_size,
+                enable_qkv_quantization=enable_qkv_quantization)
 
         device = torch.cuda.current_device()
         logger.info(f"Place model to device: {device}")
@@ -232,7 +234,8 @@ class InferenceEngine(Module):
                                 moe=False,
                                 moe_experts=1,
                                 moe_type='standard',
-                                training_mp_size=1):
+                                training_mp_size=1,
+                                enable_qkv_quantization=False):
 
         replace_transformer_layer(client_module,
                                   self.module,
@@ -243,7 +246,7 @@ class InferenceEngine(Module):
                                   ep_group=self.ep_group,
                                   expert_mp_group=self.expert_mp_group,
                                   config=self.config,
-                                  fp16=(self.dtype == torch.half),
+                                  fp16=(self.dtype == torch.half) or (self.dtype == torch.int8),
                                   training=False,
                                   return_tuple=return_tuple,
                                   quantize=(self.dtype == torch.int8),
@@ -255,7 +258,8 @@ class InferenceEngine(Module):
                                   moe=moe,
                                   moe_experts=moe_experts,
                                   moe_type=moe_type,
-                                  training_mp_size=training_mp_size
+                                  training_mp_size=training_mp_size,
+                                  enable_qkv_quantization=enable_qkv_quantization
                                   )
 
     def _get_all_ckpt_names(self, checkpoints_path, tag):

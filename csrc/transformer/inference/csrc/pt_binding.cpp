@@ -532,11 +532,13 @@ template <typename T>
 at::Tensor qkv_unfused_cublas(at::Tensor& output,
                               at::Tensor& input,
                               at::Tensor& weight,
+                              at::Tensor& q_scale,
                               at::Tensor& bias,
                               at::Tensor& gamma,
                               at::Tensor& beta,
                               const float epsilon,
-                              bool add_bias)
+                              bool add_bias,
+                              bool q_int8)
 {
     
     float alpha = (T)1.0;
@@ -545,40 +547,80 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
     T* workspace = (T*)Context::Instance().GetWorkSpace();
     workspace += (3 * input.size(0) * MAX_OUT_TOKES * input.size(2));
     ds_layernorm_internal<T>(workspace, input, gamma, beta, epsilon);
-    if (bsz > 1){
+    if(q_int8){
+        int out_size = weight.size(0);
 
-        cublasSetStream(Context::Instance().GetCublasHandle(), Context::Instance().GetCurrentStream());
-        cublas_gemm_ex(Context::Instance().GetCublasHandle(),
-                    CUBLAS_OP_N,
-                    CUBLAS_OP_N,
-                    weight.size(1),
-                    bsz,
-                    input.size(2),
-                    &alpha,
-                    &gemm_beta,
-                    (T*)weight.data_ptr(),
-                    workspace,
-                    (T*)output.data_ptr(),
-                    CUBLAS_GEMM_DEFAULT_TENSOR_OP);
-    
-        if (add_bias){
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128 : (bsz % 128 == 0) ? bsz : 
+                    ((128 - (bsz % 128)) > 32 && bsz < 512) ? 
+                        ((bsz % 64 == 0) ? bsz : 
+                        ((64 - (bsz % 64)) > 32 && bsz < 32) ? 
+                            ((bsz % 32 == 0) ? bsz : 
+                                bsz + (32 - (bsz % 32))) : 
+                        bsz + (64 - (bsz % 64))) : 
+                    bsz + (128 - (bsz % 128));
+        auto aux_buff = (T*)Context::Instance().GetWorkSpace() + 
+                    8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
+
+        launch_me((int8_t*)aux_buff,
+                (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                (__half*)workspace,
+                input.size(2),
+                bsz,
+                Context::Instance().GetCurrentStream());
+
+        run_gemm(aux_buff,
+                weight.data_ptr(),
+                output.data_ptr(),
+                (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                q_scale.data_ptr(),
+                bsz1,
+                out_size,
+                input.size(2),
+                bsz1,
+                q_scale.size(0),
+                Context::Instance().GetCurrentStream());
+        if (add_bias)
             launch_bias_add((T*)output.data_ptr(),
                                 (T*)bias.data_ptr(),
-                                weight.size(1),
+                                out_size,
                                 bsz,
                                 Context::Instance().GetCurrentStream());
-            
-        }
     }
-    else {
-        launch_input_tiled_gemm_kernel((T*)output.data_ptr(),
-                                           workspace,
-                                           (T*)weight.data_ptr(),
-                                           (T*)(add_bias ? bias.data_ptr() : nullptr),
-                                           input.size(2),
-                                           bsz,
-                                           weight.size(1),
-                                           Context::Instance().GetCurrentStream());
+    else{
+        if (bsz > 1){
+            cublasSetStream(Context::Instance().GetCublasHandle(), Context::Instance().GetCurrentStream());
+            cublas_gemm_ex(Context::Instance().GetCublasHandle(),
+                        CUBLAS_OP_N,
+                        CUBLAS_OP_N,
+                        weight.size(1),
+                        bsz,
+                        input.size(2),
+                        &alpha,
+                        &gemm_beta,
+                        (T*)weight.data_ptr(),
+                        workspace,
+                        (T*)output.data_ptr(),
+                        CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+        
+            if (add_bias){
+                launch_bias_add((T*)output.data_ptr(),
+                                    (T*)bias.data_ptr(),
+                                    weight.size(1),
+                                    bsz,
+                                    Context::Instance().GetCurrentStream());
+                
+            }
+        }
+        else {
+            launch_input_tiled_gemm_kernel((T*)output.data_ptr(),
+                                            workspace,
+                                            (T*)weight.data_ptr(),
+                                            (T*)(add_bias ? bias.data_ptr() : nullptr),
+                                            input.size(2),
+                                            bsz,
+                                            weight.size(1),
+                                            Context::Instance().GetCurrentStream());
+        }
     }
     return torch::from_blob(workspace, input.sizes(), input.options());
 }
@@ -586,12 +628,14 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
 template <typename T>
 std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
                                     at::Tensor& weight,
+                                    at::Tensor& q_scale,
                                     at::Tensor& bias,
                                     at::Tensor& gamma,
                                     at::Tensor& beta,
                                     const float epsilon,
                                     bool add_bias,
-                                    unsigned num_layers)
+                                    unsigned num_layers,
+                                    bool q_int8)
 {
     
     int bsz = input.size(0) * input.size(1);
@@ -613,7 +657,7 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
 
 
     auto inp_norm =
-        qkv_unfused_cublas<T>(output, input, weight, bias, gamma, beta, epsilon, add_bias);
+        qkv_unfused_cublas<T>(output, input, weight, q_scale, bias, gamma, beta, epsilon, add_bias, q_int8);
 
     return {output, inp_norm};
 }
@@ -700,45 +744,87 @@ at::Tensor ds_qkv_gemm_int8(at::Tensor& input,
 }
 
 template <typename T>
-at::Tensor ds_linear_layer(at::Tensor& input, at::Tensor& weight, at::Tensor& bias)
+at::Tensor ds_linear_layer(at::Tensor& input, 
+                           at::Tensor& weight, 
+                           at::Tensor& q_scale, 
+                           at::Tensor& bias,
+                           bool q_int8)
 {
-    auto input_cont = input.contiguous();
     auto options = at::TensorOptions()
-                       .dtype(input_cont.options().dtype())
+                       .dtype(input.options().dtype())
                        .layout(at::kStrided)
                        .device(at::kCUDA)
                        .requires_grad(false);
 
-    auto output = at::empty({input_cont.size(0), input_cont.size(1), weight.size(1)}, options);
-    int bsz = input_cont.size(0) * input_cont.size(1);
+    auto output = at::empty({input.size(0), input.size(1), weight.size(1)}, options);
+    int bsz = input.size(0) * input.size(1);
+    if(q_int8){
+        int out_size = weight.size(0);
 
-    float alpha = (T)1.0;
-    float gemm_beta = (T)0.0;
-    cublasSetStream(Context::Instance().GetCublasHandle(), Context::Instance().GetCurrentStream());
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128 : (bsz % 128 == 0) ? bsz : 
+                    ((128 - (bsz % 128)) > 32 && bsz < 512) ? 
+                        ((bsz % 64 == 0) ? bsz : 
+                        ((64 - (bsz % 64)) > 32 && bsz < 32) ? 
+                            ((bsz % 32 == 0) ? bsz : 
+                                bsz + (32 - (bsz % 32))) : 
+                        bsz + (64 - (bsz % 64))) : 
+                    bsz + (128 - (bsz % 128));
+        auto aux_buff = (T*)Context::Instance().GetWorkSpace() + 
+                    8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
 
-    cublas_gemm_ex(Context::Instance().GetCublasHandle(),
-                   CUBLAS_OP_N,
-                   CUBLAS_OP_N,
-                   weight.size(1),
-                   bsz,
-                   input_cont.size(2),
-                   &alpha,
-                   &gemm_beta,
-                   (T*)weight.data_ptr(),
-                   (T*)input_cont.data_ptr(),
-                   (T*)output.data_ptr(),
-#ifdef __HIP_PLATFORM_HCC__
-                   rocblas_gemm_algo_standard);
-#else
-                   CUBLAS_GEMM_DEFAULT_TENSOR_OP);
-#endif
+        launch_me((int8_t*)aux_buff,
+                (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                (__half*)input.data_ptr(),
+                input.size(2),
+                bsz,
+                Context::Instance().GetCurrentStream());
 
-    launch_bias_add((T*)output.data_ptr(),
-                    (T*)bias.data_ptr(),
+        run_gemm(aux_buff,
+                weight.data_ptr(),
+                output.data_ptr(),
+                (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                q_scale.data_ptr(),
+                bsz1,
+                out_size,
+                input.size(2),
+                bsz1,
+                q_scale.size(0),
+                Context::Instance().GetCurrentStream());
+
+        launch_bias_add((T*)output.data_ptr(),
+                                (T*)bias.data_ptr(),
+                                out_size,
+                                bsz,
+                                Context::Instance().GetCurrentStream());
+    } 
+    else{
+        float alpha = (T)1.0;
+        float gemm_beta = (T)0.0;
+        cublasSetStream(Context::Instance().GetCublasHandle(), Context::Instance().GetCurrentStream());
+
+        cublas_gemm_ex(Context::Instance().GetCublasHandle(),
+                    CUBLAS_OP_N,
+                    CUBLAS_OP_N,
                     weight.size(1),
                     bsz,
-                    Context::Instance().GetCurrentStream());
+                    input.size(2),
+                    &alpha,
+                    &gemm_beta,
+                    (T*)weight.data_ptr(),
+                    (T*)input.data_ptr(),
+                    (T*)output.data_ptr(),
+    #ifdef __HIP_PLATFORM_HCC__
+                    rocblas_gemm_algo_standard);
+    #else
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+    #endif
 
+        launch_bias_add((T*)output.data_ptr(),
+                        (T*)bias.data_ptr(),
+                        weight.size(1),
+                        bsz,
+                        Context::Instance().GetCurrentStream());
+    }
     return output;
 }
 
@@ -1449,7 +1535,9 @@ void TransformerEncoder(at::Tensor& input,
                         bool q_int8,
                         at::Tensor& q_scale,
                         at::Tensor& q_scale1,
-                        at::Tensor& q_scale2)
+                        at::Tensor& q_scale2, 
+                        bool enable_qkv_quantization,
+                        at::Tensor& q_scale3)
 {
 
     unsigned bsz = input.size(0);
@@ -1491,7 +1579,7 @@ void TransformerEncoder(at::Tensor& input,
     float alpha = (T)1.0;
     float gemm_beta = (T)0.0;
     int bsz_heads = bsz * num_heads;
-    if (preln) {
+    if (preln)
         launch_layer_norm(buf_0,
                           input_ptr,
                           (T*)input_norm[0].data_ptr(),
@@ -1500,6 +1588,29 @@ void TransformerEncoder(at::Tensor& input,
                           bsz_seq,
                           hidden_dim,
                           new_stream);
+    if(enable_qkv_quantization){
+        int out_size = attn_weights[0].size(0);
+
+        launch_me((int8_t*)aux_buff,
+                (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                (__half*)(preln ? buf_2 : input_ptr),
+                input.size(2),
+                bsz_seq,
+                Context::Instance().GetCurrentStream());
+
+        run_gemm(aux_buff,
+                attn_weights[0].data_ptr(),
+                buf_1,
+                (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                q_scale3.data_ptr(),
+                bsz1,
+                out_size,
+                input.size(2),
+                bsz1,
+                q_scale3.size(0),
+                Context::Instance().GetCurrentStream());
+    }
+    else{
         cublas_gemm_ex(cub_handle,
                        CUBLAS_OP_N,
                        CUBLAS_OP_N,
@@ -1509,24 +1620,10 @@ void TransformerEncoder(at::Tensor& input,
                        &alpha,
                        &gemm_beta,
                        (T*)attn_weights[0].data_ptr(),
-                       buf_0,
+                       preln ? buf_2 : input_ptr,
                        buf_1,
                        CUBLAS_GEMM_DEFAULT_TENSOR_OP);
     }
-    else
-        cublas_gemm_ex(cub_handle,
-                       CUBLAS_OP_N,
-                       CUBLAS_OP_N,
-                       attn_weights[0].size(1),
-                       bsz_seq,
-                       hidden_dim,
-                       &alpha,
-                       &gemm_beta,
-                       (T*)attn_weights[0].data_ptr(),
-                       input_ptr,
-                       buf_1,
-                       CUBLAS_GEMM_DEFAULT_TENSOR_OP);
-    
     if (_seq_length >= 32 || (bsz * (hidden_dim / num_heads)) > 128) {    
         launch_bias_add_transform_0213<T>(
             buf_2, buf_1, 
@@ -1612,7 +1709,6 @@ void TransformerEncoder(at::Tensor& input,
                 bsz_seq,
                 Context::Instance().GetCurrentStream());
 
-        auto output = at::from_blob(workspace, input.sizes(), input.options());   
         run_gemm(aux_buff,
                 attn_weights[1].data_ptr(),
                 buf_1,
