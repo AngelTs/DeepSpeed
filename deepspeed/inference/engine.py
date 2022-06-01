@@ -246,7 +246,8 @@ class InferenceEngine(Module):
                                   ep_group=self.ep_group,
                                   expert_mp_group=self.expert_mp_group,
                                   config=self.config,
-                                  fp16=(self.dtype == torch.half) or (self.dtype == torch.int8),
+                                  fp16=(self.dtype == torch.half)
+                                  or (self.dtype == torch.int8),
                                   training=False,
                                   return_tuple=return_tuple,
                                   quantize=(self.dtype == torch.int8),
@@ -259,8 +260,7 @@ class InferenceEngine(Module):
                                   moe_experts=moe_experts,
                                   moe_type=moe_type,
                                   training_mp_size=training_mp_size,
-                                  enable_qkv_quantization=enable_qkv_quantization
-                                  )
+                                  enable_qkv_quantization=enable_qkv_quantization)
 
     def _get_all_ckpt_names(self, checkpoints_path, tag):
         ckpt_file_pattern = self._get_ckpt_name(checkpoints_path,
@@ -340,7 +340,7 @@ class InferenceEngine(Module):
             return 'model'
 
     def _convert_to_dtype(self):
-        if False: #self.dtype is torch.int8 and self.quantization_scales is None:
+        if False:  #self.dtype is torch.int8 and self.quantization_scales is None:
             quantizer = WeightQuantization(mlp_extra_grouping=self.mlp_extra_grouping)
             model, self.quantization_scales = quantizer.model_quantize(self.module,
                                                                         self.injection_dict,
@@ -364,15 +364,15 @@ class InferenceEngine(Module):
         cuda_stream = torch.cuda.Stream()
         cuda_stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(cuda_stream):
-           for i in range(3):
-               ret = self.module(*inputs, **kwargs)
+            for i in range(3):
+                ret = self.module(*inputs, **kwargs)
         torch.cuda.current_stream().wait_stream(cuda_stream)
-        
+
         # create cuda_graph and assign static_inputs and static_outputs
         self._cuda_graphs = torch.cuda.CUDAGraph()
         self.static_inputs = inputs
         self.static_kwargs = kwargs
-        
+
         with torch.cuda.graph(self._cuda_graphs):
             self.static_output = self.module(*self.static_inputs, **self.static_kwargs)
 
@@ -387,7 +387,7 @@ class InferenceEngine(Module):
                 self.static_kwargs[k].copy_(kwargs[k])
         self._cuda_graphs.replay()
         return self.static_output
-                
+
     def forward(self, *inputs, **kwargs):
         """Execute forward propagation
 

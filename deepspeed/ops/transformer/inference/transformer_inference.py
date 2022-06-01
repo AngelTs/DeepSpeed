@@ -160,34 +160,36 @@ class DeepSpeedSelfAttentionFunction(Function):
             new_x_layer_shape = x.size()[:-2] + \
                                       (hidden_size_per_partition,)
             return x.view(*new_x_layer_shape).contiguous()
+
         def compute_attention(qkv_out, input_mask):
             no_masking = input_mask is None
             if no_masking:
                 input_mask = torch.empty(1)
             head_size = (qkv_out.shape[-1] // 3 // num_attention_heads_per_partition)
-            attn_key_value = score_context_func(qkv_out,
-                    input_mask,
-                    config.rotary_dim,
-                    config.rotate_half,
-                    config.rotate_every_two,
-                    num_attention_heads_per_partition,
-                    (1 / norm_factor if config.scale_attention else 1.0),
-                    config.triangular_masking,
-                    config.local_attention,
-                    config.window_size,
-                    no_masking,
-                    config.layer_id,
-                    DeepSpeedTransformerInference.layer_id)
-            
+            attn_key_value = score_context_func(
+                qkv_out,
+                input_mask,
+                config.rotary_dim,
+                config.rotate_half,
+                config.rotate_every_two,
+                num_attention_heads_per_partition,
+                (1 / norm_factor if config.scale_attention else 1.0),
+                config.triangular_masking,
+                config.local_attention,
+                config.window_size,
+                no_masking,
+                config.layer_id,
+                DeepSpeedTransformerInference.layer_id)
+
             context_layer, key_layer, value_layer = attn_key_value
             return context_layer, key_layer, value_layer
 
         def selfAttention_fp():
             if not config.pre_layer_norm:
-                qkv_out = linear_func(input, 
-                                      attn_qkvw, 
+                qkv_out = linear_func(input,
+                                      attn_qkvw,
                                       attn_qkvw.scale,
-                                      attn_qkvb, 
+                                      attn_qkvb,
                                       config.enable_qkv_quantization)
             else:
                 qkv_out = qkv_func(input,
@@ -198,15 +200,19 @@ class DeepSpeedSelfAttentionFunction(Function):
                                    norm_b,
                                    config.epsilon,
                                    (attn_qkvb is not None),
-                                   DeepSpeedTransformerInference.layer_id, 
+                                   DeepSpeedTransformerInference.layer_id,
                                    config.enable_qkv_quantization)
 
             context_layer, key_layer, value_layer = compute_attention(qkv_out[0] if isinstance(qkv_out, list) else qkv_out, input_mask)
-            
-            output = vector_matmul_func(context_layer, attn_ow, False, attn_ow.scale, config.q_int8)
+
+            output = vector_matmul_func(context_layer,
+                                        attn_ow,
+                                        False,
+                                        attn_ow.scale,
+                                        config.q_int8)
 
             return output, key_layer, value_layer, context_layer, qkv_out[-1] # attn_out, present_key, present_value, context_output, inp_norm
-        
+
         output, key_layer, value_layer, context_layer, inp_norm = selfAttention_fp()
         if config.mlp_after_attn and mp_group is not None and dist.get_world_size(
                 group=mp_group) > 1:
@@ -254,7 +260,7 @@ class DeepSpeedSelfAttention(nn.Module):
         if inference_cuda_module is None:
             builder = op_builder.InferenceBuilder()
             inference_cuda_module = builder.load()
-            
+
         self.mp_group = mp_group
 
         # used for quantization
@@ -266,7 +272,7 @@ class DeepSpeedSelfAttention(nn.Module):
             math.sqrt(self.config.hidden_size // self.config.heads))
         self.qkv_merging = qkv_merging
         self.score_context_func = inference_cuda_module.softmax_context_fp16 if (config.fp16 or config.q_int8) else \
-                                    inference_cuda_module.softmax_context_fp32 
+                                    inference_cuda_module.softmax_context_fp32
         self.qkv_func = inference_cuda_module.qkv_gemm_fp16 if config.fp16 or config.q_int8 else \
                                     inference_cuda_module.qkv_gemm_fp32
         self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int8 else \
@@ -349,23 +355,23 @@ class DeepSpeedMLPFunction(Function):
                                      config.pre_layer_norm,
                                      False,
                                      output_w.scale,
-                                     inter_w.scale, 
+                                     inter_w.scale,
                                      config.q_int8)
         else:
             output = mlp_gemm_func(input,
-                                         residual,
-                                         bias,
-                                         inter_w,
-                                         output_w,
-                                         inter_b,
-                                         attn_nw,
-                                         attn_nb,
-                                         config.epsilon,
-                                         config.pre_layer_norm,
-                                         config.mlp_after_attn,
-                                         output_w.scale,
-                                         inter_w.scale, 
-                                         config.q_int8)
+                                   residual,
+                                   bias,
+                                   inter_w,
+                                   output_w,
+                                   inter_b,
+                                   attn_nw,
+                                   attn_nb,
+                                   config.epsilon,
+                                   config.pre_layer_norm,
+                                   config.mlp_after_attn,
+                                   output_w.scale,
+                                   inter_w.scale,
+                                   config.q_int8)
         inference_cuda_module.residual_add(output,
                                            residual,
                                            input,
@@ -417,7 +423,7 @@ class DeepSpeedMLP(nn.Module):
         if inference_cuda_module is None:
             builder = op_builder.InferenceBuilder()
             inference_cuda_module = builder.load()
-            
+
         self.mlp_gemm_func = inference_cuda_module.mlp_gemm_fp16 if config.fp16 or config.q_int8 else \
                                     inference_cuda_module.mlp_gemm_fp32
         self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int8 else \

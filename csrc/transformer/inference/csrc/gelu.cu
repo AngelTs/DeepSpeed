@@ -1,6 +1,5 @@
 #include "custom_cuda_layers.h"
 
-
 namespace cg = cooperative_groups;
 #define MAX_CAP 4
 #define MAX_SEQ 2048
@@ -379,14 +378,14 @@ __global__ void gptj_residual_add(__half* input,
         float2 attn_low_bias = __half22float2(attnbias_half[0]);
         float2 attn_high_bias = __half22float2(attnbias_half[1]);
 
-        low_data.x =
-            low_data.x * mp_size + (low_out.x + low_res.x + (low_bias.x + (attn_bias ? attn_low_bias.x : 0)));
-        low_data.y =
-            low_data.y * mp_size + (low_out.y + low_res.y + (low_bias.y + (attn_bias ? attn_low_bias.y : 0)));
-        high_data.x =
-            high_data.x * mp_size + (high_out.x + high_res.x + (high_bias.x + (attn_bias ? attn_high_bias.x : 0)));
-        high_data.y =
-            high_data.y * mp_size + (high_out.y + high_res.y + (high_bias.y + (attn_bias ? attn_high_bias.y : 0)));
+        low_data.x = low_data.x * mp_size +
+                     (low_out.x + low_res.x + (low_bias.x + (attn_bias ? attn_low_bias.x : 0)));
+        low_data.y = low_data.y * mp_size +
+                     (low_out.y + low_res.y + (low_bias.y + (attn_bias ? attn_low_bias.y : 0)));
+        high_data.x = high_data.x * mp_size + (high_out.x + high_res.x +
+                                               (high_bias.x + (attn_bias ? attn_high_bias.x : 0)));
+        high_data.y = high_data.y * mp_size + (high_out.y + high_res.y +
+                                               (high_bias.y + (attn_bias ? attn_high_bias.y : 0)));
 
         vals_half[0] = __float22half2_rn(low_data);
         vals_half[1] = __float22half2_rn(high_data);
@@ -525,13 +524,13 @@ template void launch_moe_res_matmul(__half* residual,
                                     int seq_len,
                                     int hidden_dim,
                                     cudaStream_t stream);
-                                    
+
 __device__ void quantize_kernel_glue(float2* data,
-                                unsigned cnt,
-                                int8_t* vals_int,
-                                float* q_scale_d,
-                                int num_bits,
-                                int group_size)
+                                     unsigned cnt,
+                                     int8_t* vals_int,
+                                     float* q_scale_d,
+                                     int num_bits,
+                                     int group_size)
 {
     cg::thread_block b = cg::this_thread_block();
     cg::thread_block_tile<32> g = cg::tiled_partition<32>(b);
@@ -546,7 +545,7 @@ __device__ void quantize_kernel_glue(float2* data,
     __half max = -10000.0;
     int bid = blockIdx.x;
     unsigned group_index;
-    for(int i = 0;i < cnt;i++){
+    for (int i = 0; i < cnt; i++) {
         __half* data_h = reinterpret_cast<__half*>(&data[i]);
         if (__hgt(__habs(data_h[0]), max)) max = __habs(data_h[0]);
         if (__hgt(__habs(data_h[1]), max)) max = __habs(data_h[1]);
@@ -554,7 +553,7 @@ __device__ void quantize_kernel_glue(float2* data,
         if (__hgt(__habs(data_h[3]), max)) max = __habs(data_h[3]);
     }
 
-    #pragma unroll
+#pragma unroll
     for (int i = 1; i < WARP_SIZE; i <<= 1) {
         auto temp = g.shfl_xor(max, i);
         if (__hgt(temp, max)) max = temp;
@@ -569,7 +568,7 @@ __device__ void quantize_kernel_glue(float2* data,
 
     b.sync();
 
-    #pragma unroll
+#pragma unroll
     for (int i = 1; i < warp_num; i <<= 1) {
         auto temp = g.shfl_xor(max, i);
         if (__hgt(temp, max)) max = temp;
@@ -579,7 +578,7 @@ __device__ void quantize_kernel_glue(float2* data,
     float q_scale = (1 << num_bits) / (2 * (float)max + 1e-5);
 
     group_index = threadIdx.x + bid * group_size;
-    for(int i = 0;i < cnt;i++){
+    for (int i = 0; i < cnt; i++) {
         float q_data_int;
         int8_t* q_data_8 = reinterpret_cast<int8_t*>(&q_data_int);
         __half* data_h = reinterpret_cast<__half*>(&data[i]);
@@ -592,21 +591,21 @@ __device__ void quantize_kernel_glue(float2* data,
         q_data_8[1] = data_f[1] > 127 ? 127 : (data_f[1] < -128 ? -128 : data_f[1]);
         q_data_8[2] = data_f[2] > 127 ? 127 : (data_f[2] < -128 ? -128 : data_f[2]);
         q_data_8[3] = data_f[3] > 127 ? 127 : (data_f[3] < -128 ? -128 : data_f[3]);
-        //q_data_8[0] = !(data_f[0] & 0x80000000) && (data_f[0] & 0x00000080) ? 127 : data_f[0];
-        //q_data_8[1] = !(data_f[1] & 0x80000000) && (data_f[1] & 0x00000080) ? 127 : data_f[1];
-        //q_data_8[2] = !(data_f[2] & 0x80000000) && (data_f[2] & 0x00000080) ? 127 : data_f[2];
-        //q_data_8[3] = !(data_f[3] & 0x80000000) && (data_f[3] & 0x00000080) ? 127 : data_f[3];
+        // q_data_8[0] = !(data_f[0] & 0x80000000) && (data_f[0] & 0x00000080) ? 127 : data_f[0];
+        // q_data_8[1] = !(data_f[1] & 0x80000000) && (data_f[1] & 0x00000080) ? 127 : data_f[1];
+        // q_data_8[2] = !(data_f[2] & 0x80000000) && (data_f[2] & 0x00000080) ? 127 : data_f[2];
+        // q_data_8[3] = !(data_f[3] & 0x80000000) && (data_f[3] & 0x00000080) ? 127 : data_f[3];
         vals_int_cast[group_index] = q_data_int;
         group_index += (blockDim.x);
     }
     if (threadIdx.x == 0) q_scale_d[blockIdx.x] = 1 / q_scale;
 }
-__global__ void fused_bias_gelu_int8(int8_t *output,
-                                float* scales,
-                                __half* input,
-                                const __half* bias,
-                                int total_count,
-                                int intermediate_size)
+__global__ void fused_bias_gelu_int8(int8_t* output,
+                                     float* scales,
+                                     __half* input,
+                                     const __half* bias,
+                                     int total_count,
+                                     int intermediate_size)
 {
 #if __CUDA_ARCH__ >= 700
 
@@ -644,25 +643,19 @@ __global__ void fused_bias_gelu_int8(int8_t *output,
         vals_half[0] = __float22half2_rn(low_data);
         vals_half[1] = __float22half2_rn(high_data);
 
-        //input_cast[offset + id] = vals_vec;
+        // input_cast[offset + id] = vals_vec;
         id += blockDim.x;
         cnt++;
     }
-    quantize_kernel_glue(vals_vec,
-                    cnt,
-                    output,
-                    scales,
-                    8,
-                    intermediate_size);
+    quantize_kernel_glue(vals_vec, cnt, output, scales, 8, intermediate_size);
 #endif
 }
-__global__ void quantize_int8(int8_t *output,
-                                float* scales,
-                                __half* input,
-                                int total_count,
-                                int intermediate_size)
+__global__ void quantize_int8(int8_t* output,
+                              float* scales,
+                              __half* input,
+                              int total_count,
+                              int intermediate_size)
 {
-
     float2* input_cast = reinterpret_cast<float2*>(input);
 
     int offset = blockIdx.x * intermediate_size;
@@ -675,21 +668,16 @@ __global__ void quantize_int8(int8_t *output,
         id += blockDim.x;
         cnt++;
     }
-    quantize_kernel_glue(vals_vec,
-                    cnt,
-                    output,
-                    scales,
-                    8,
-                    intermediate_size);
+    quantize_kernel_glue(vals_vec, cnt, output, scales, 8, intermediate_size);
 }
 
-void launch_bias_gelu_int8(int8_t *output,
-                      float* scales,
-                      __half* input,
-                      const __half* bias,
-                      int intermediate_size,
-                      int batch_size,
-                      cudaStream_t stream)
+void launch_bias_gelu_int8(int8_t* output,
+                           float* scales,
+                           __half* input,
+                           const __half* bias,
+                           int intermediate_size,
+                           int batch_size,
+                           cudaStream_t stream)
 {
     int total_count = batch_size * (intermediate_size / 4);
     int threads = 1024;  // intermediate_size / iterations / 4;
@@ -716,15 +704,14 @@ void launch_me(int8_t* output,
         output, scales, input, total_count, intermediate_size / 4);
 }
 
-
 __global__ void fused_bias_residual1(float* input,
-                                    const float* residual,
-                                    const float* output,
-                                    const float* bias,
-                                    const float* bias1,
-                                    int total_count,
-                                    int intermediate_size,
-                                    bool preln)
+                                     const float* residual,
+                                     const float* output,
+                                     const float* bias,
+                                     const float* bias1,
+                                     int total_count,
+                                     int intermediate_size,
+                                     bool preln)
 {
     float4* input_cast = reinterpret_cast<float4*>(input);
     const float4* residual_cast = reinterpret_cast<const float4*>(residual);
@@ -742,9 +729,7 @@ __global__ void fused_bias_residual1(float* input,
         data.y += (res_vec.y + bias_data.y + out_vec.y + bias_data.y);
         data.z += (res_vec.z + bias_data.z + out_vec.z + bias_data.z);
         data.w += (res_vec.w + bias_data.w + out_vec.w + bias_data.w);
-        if (preln) {
-            bias_data = bias1_cast[offset % intermediate_size];
-        } 
+        if (preln) { bias_data = bias1_cast[offset % intermediate_size]; }
         data.x = preln ? (data.x + bias_data.x) : data.x;
         data.y = preln ? (data.y + bias_data.y) : data.y;
         data.z = preln ? (data.z + bias_data.z) : data.z;
@@ -754,13 +739,13 @@ __global__ void fused_bias_residual1(float* input,
 }
 
 __global__ void fused_bias_residual1(__half* input,
-                                    const __half* residual,
-                                    const __half* output,
-                                    const __half* bias,
-                                    const __half* bias1,
-                                    int total_count,
-                                    int intermediate_size,
-                                    bool preln)
+                                     const __half* residual,
+                                     const __half* output,
+                                     const __half* bias,
+                                     const __half* bias1,
+                                     int total_count,
+                                     int intermediate_size,
+                                     bool preln)
 {
 #ifdef HALF_PRECISION_AVAILABLE
 
@@ -797,8 +782,8 @@ __global__ void fused_bias_residual1(__half* input,
         float2 low_bias = __half22float2(bias_half[0]);
         float2 high_bias = __half22float2(bias_half[1]);
 
-        low_data.x +=  low_out.x + low_bias.x;
-        low_data.y +=  low_out.y + low_bias.y;
+        low_data.x += low_out.x + low_bias.x;
+        low_data.y += low_out.y + low_bias.y;
         high_data.x += high_out.x + high_bias.x;
         high_data.y += high_out.y + high_bias.y;
 
@@ -807,11 +792,11 @@ __global__ void fused_bias_residual1(__half* input,
             low_bias = __half22float2(bias_half[0]);
             high_bias = __half22float2(bias_half[1]);
         }
-        low_data.x  = preln ? (low_data.x + low_res.x + low_bias.x) : low_data.x ;
-        low_data.y  = preln ? (low_data.y + low_res.y + low_bias.y) : low_data.y ;
-        high_data.x = preln ? (high_data.x + high_res.x  + high_bias.x) : high_data.x;
-        high_data.y = preln ? (high_data.y + high_res.y  + high_bias.y) : high_data.y;
-        
+        low_data.x = preln ? (low_data.x + low_res.x + low_bias.x) : low_data.x;
+        low_data.y = preln ? (low_data.y + low_res.y + low_bias.y) : low_data.y;
+        high_data.x = preln ? (high_data.x + high_res.x + high_bias.x) : high_data.x;
+        high_data.y = preln ? (high_data.y + high_res.y + high_bias.y) : high_data.y;
+
         vals_half[0] = __float22half2_rn(low_data);
         vals_half[1] = __float22half2_rn(high_data);
 
@@ -822,14 +807,14 @@ __global__ void fused_bias_residual1(__half* input,
 
 template <typename T>
 void launch_bias_residual1(T* input,
-                          const T* residual,
-                          const T* output,
-                          const T* bias,
-                          const T* bias1,
-                          int batch,
-                          int intermediate_size,
-                          bool preln,
-                          cudaStream_t stream)
+                           const T* residual,
+                           const T* output,
+                           const T* bias,
+                           const T* bias1,
+                           int batch,
+                           int intermediate_size,
+                           bool preln,
+                           cudaStream_t stream)
 {
     int total_count = batch * intermediate_size / 4;
     dim3 block_dims(1024);
@@ -839,7 +824,21 @@ void launch_bias_residual1(T* input,
         input, residual, output, bias, bias1, total_count, intermediate_size / 4, preln);
 }
 
-template void
-launch_bias_residual1<float>(float*, const float*, const float*, const float*, const float*, int, int, bool, cudaStream_t);
-template void
-launch_bias_residual1<__half>(__half*, const __half*, const __half*, const __half*, const __half*, int, int, bool, cudaStream_t);
+template void launch_bias_residual1<float>(float*,
+                                           const float*,
+                                           const float*,
+                                           const float*,
+                                           const float*,
+                                           int,
+                                           int,
+                                           bool,
+                                           cudaStream_t);
+template void launch_bias_residual1<__half>(__half*,
+                                            const __half*,
+                                            const __half*,
+                                            const __half*,
+                                            const __half*,
+                                            int,
+                                            int,
+                                            bool,
+                                            cudaStream_t);

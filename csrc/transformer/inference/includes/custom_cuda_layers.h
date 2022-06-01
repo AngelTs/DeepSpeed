@@ -134,7 +134,8 @@ void launch_input_tiled_gemm_kernel(T* output,
                                     int hidden_dim,
                                     int input_size,
                                     int output_size,
-                                    cudaStream_t stream, bool add_gelu=false);
+                                    cudaStream_t stream,
+                                    bool add_gelu = false);
 template <typename T>
 void launch_input_tiled_gemm_kernel_v2(T* output,
                                        const T* vals,
@@ -148,7 +149,8 @@ void launch_input_tiled_gemm_kernel_v2(T* output,
                                        cudaStream_t stream);
 
 template <typename T>
-void launch_input_tiled_gemm_kernel(T* output,T* intermediate,
+void launch_input_tiled_gemm_kernel(T* output,
+                                    T* intermediate,
                                     const T* vals,
                                     const T* weight,
                                     const T* gamma,
@@ -172,7 +174,6 @@ void launch_transform4d_0213(T* out,
                              cudaStream_t stream,
                              int trans_count);
 
-
 template <typename T>
 void launch_bias_add_transform_0213(T* outputs,
                                     const T* vals,
@@ -186,8 +187,8 @@ void launch_bias_add_transform_0213(T* outputs,
 // Custom bias add
 template <typename T>
 void launch_bias_add_transform_0213(T* outputs,
-                                     T* vals,
-                                     T* vals1,
+                                    T* vals,
+                                    T* vals1,
                                     const T* vals2,
                                     const T* bias,
                                     int batch_size,
@@ -201,19 +202,19 @@ void launch_bias_add_transform_0213(T* outputs,
                                     bool rotate_every_two,
                                     cudaStream_t stream,
                                     int trans_count);
-template<typename T>
+template <typename T>
 void launch_transform_scale(T* vals,
-                                   T* query,
-                                   T* kv_cache,
-                                   int batch_size,
-                                   int seq_length,
-                                   unsigned cur_tokens,
-                                   size_t value_offset,
-                                   unsigned hidden_dim,
-                                   int heads,
-                                   cudaStream_t stream,
-                                   int trans_count,
-                                   float norm_factor);
+                            T* query,
+                            T* kv_cache,
+                            int batch_size,
+                            int seq_length,
+                            unsigned cur_tokens,
+                            size_t value_offset,
+                            unsigned hidden_dim,
+                            int heads,
+                            cudaStream_t stream,
+                            int trans_count,
+                            float norm_factor);
 
 void run_gemm(void* A,
               void* B,
@@ -227,17 +228,21 @@ void run_gemm(void* A,
               int groups1,
               cudaStream_t stream);
 
-void launch_me(int8_t* output,float* scales,__half* input,
-                int intermediate_size,int batch_size,cudaStream_t stream);
+void launch_me(int8_t* output,
+               float* scales,
+               __half* input,
+               int intermediate_size,
+               int batch_size,
+               cudaStream_t stream);
 
-void launch_bias_gelu_int8(int8_t *output,
-                      float* scales,
-                      __half* input,
-                      const __half* bias,
-                      int intermediate_size,
-                      int batch_size,
-                      cudaStream_t stream);
-template<typename T>
+void launch_bias_gelu_int8(int8_t* output,
+                           float* scales,
+                           __half* input,
+                           const __half* bias,
+                           int intermediate_size,
+                           int batch_size,
+                           cudaStream_t stream);
+template <typename T>
 void launch_residual_layer_norm_int8(int8_t* res_add,
                                      float* scales,
                                      T* vals,
@@ -251,7 +256,7 @@ void launch_residual_layer_norm_int8(int8_t* res_add,
                                      bool preLN,
                                      int mp_size,
                                      cudaStream_t stream);
-template<typename T>
+template <typename T>
 void launch_layer_norm_int8(int8_t* out,
                             float* scales,
                             T* vals,
@@ -282,22 +287,22 @@ void launch_attn_softmax_context(T* out,
 
 template <typename T>
 void launch_residual_layer_norm1(T* norm,
-                                T* vals,
-                                T* residual,
-                                const T* bias,
-                                const T* gamma,
-                                const T* beta,
-                                float epsilon,
-                                int batch_size,
-                                int hidden_dim,
-                                cudaStream_t stream);
+                                 T* vals,
+                                 T* residual,
+                                 const T* bias,
+                                 const T* gamma,
+                                 const T* beta,
+                                 float epsilon,
+                                 int batch_size,
+                                 int hidden_dim,
+                                 cudaStream_t stream);
 template <typename T>
 void launch_bias_residual1(T* input,
-                          const T* residual,
-                          const T* output,
-                          const T* bias,
-                          const T* bias1,
-                          int batch,
-                          int intermediate_size,
-                          bool preln,
-                          cudaStream_t stream);
+                           const T* residual,
+                           const T* output,
+                           const T* bias,
+                           const T* bias1,
+                           int batch,
+                           int intermediate_size,
+                           bool preln,
+                           cudaStream_t stream);

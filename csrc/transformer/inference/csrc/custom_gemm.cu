@@ -360,11 +360,12 @@ void launch_input_tiled_gemm_kernel_v2<__half>(__half* output,
     int threads = ((hidden_dim / block_reduce) >> 1);
     if (threads > 1024) threads = 1024;
     int blockStride = ((output_size >> 2) * hidden_dim) / block_reduce;
-    //printf("block_reduce =  %d , br2 = %d ,  threads = %d\n, hidden: %d, output: %d",
+    // printf("block_reduce =  %d , br2 = %d ,  threads = %d\n, hidden: %d, output: %d",
     // block_reduce, br2, threads, hidden_dim, output_size);
     dim3 grid_dim(outputBlocks * block_reduce);
     dim3 block_dim(threads);
-    //printf("hidden=%d, out_size:%d, \t blocks: %d, threads: %d \n", hidden_dim, output_size, grid_dim.x, block_dim.x);
+    // printf("hidden=%d, out_size:%d, \t blocks: %d, threads: %d \n", hidden_dim, output_size,
+    // grid_dim.x, block_dim.x);
     cudaFuncSetAttribute(
         input_tiled_gemm_kernel_v2_fff, cudaFuncAttributeMaxDynamicSharedMemorySize, 98160);
     input_tiled_gemm_kernel_v2_fff<<<grid_dim, block_dim, 98160, stream>>>(
@@ -387,8 +388,6 @@ void launch_input_tiled_gemm_kernel_v2<__half>(__half* output,
             output, block_sums, input_size, (output_size), add_gelu);
     }
 }
-
-
 
 __global__ void input_tiled_gemm_kernel_gelu(__half* output,
                                              __half* residual_add,
@@ -440,7 +439,7 @@ __global__ void input_tiled_gemm_kernel_gelu(__half* output,
                     inp_f.x += residual_f.x + bias_f.x;
                     inp_f.y += residual_f.y + bias_f.y;
                     inp_reg[k] = __float22half2_rn(inp_f);
-                    //if (preLN) residual_add_cast[(j + t) * hidden_half + input_id] = inp_reg[k];
+                    // if (preLN) residual_add_cast[(j + t) * hidden_half + input_id] = inp_reg[k];
                     input_shared[input_id + t * hidden_half] = inp_reg[k++];
                     input_id += blockDim.x;
                 }
@@ -770,9 +769,6 @@ __global__ void input_tiled_gemm_kernel_gelu(float* output,
     }
 }
 
-
-
-
 template <typename T>
 void launch_input_tiled_gemm_kernel_gelu(T* output,
                                          T* residual_add,
@@ -865,18 +861,18 @@ __global__ void input_tiled_gemm_kernel(__half* output,
     const float2* weight_cast = reinterpret_cast<const float2*>(weight);
 
     unsigned int col_index = blockIdx.x * WARP_SIZE + lane;
-    __half2 ZERO_h2 = __float2half2_rn(0.f); 
+    __half2 ZERO_h2 = __float2half2_rn(0.f);
     {
         float2 sum;
         __half2 *sum_h = (__half2*)(&sum);
-        sum_h[0] = __float2half2_rn(0.f); 
-        sum_h[1] = __float2half2_rn(0.f); 
+        sum_h[0] = __float2half2_rn(0.f);
+        sum_h[1] = __float2half2_rn(0.f);
 
         {
             int wid = gid << loop_unroll_bits;
             weight_cast += (wid * output_size + col_index);
 
-            while (wid < hidden_dim) 
+            while (wid < hidden_dim)
             {
                 __half2 vals_f[loop_unroll * (INPUT_TILE1)];
                 {
@@ -921,7 +917,7 @@ __global__ void input_tiled_gemm_kernel(__half* output,
             __shared__ float2 partial_result[2 * MAX_WARP_NUM * (WARP_SIZE + 1)];
 
             {
-                
+
               {
                     __half2 *sum_g_h = (__half2*)(&sum);
                     float2 sum_f[2];
@@ -1129,7 +1125,8 @@ __global__ void input_tiled_gemm_kernel(__half* output,
                                         const __half* bias,
                                         int hidden_dim,
                                         int input_size,
-                                        int output_size, bool add_gelu)
+                                        int output_size,
+                                        bool add_gelu)
 {
 #if __CUDA_ARCH__ >= 700
 
@@ -1146,33 +1143,32 @@ __global__ void input_tiled_gemm_kernel(__half* output,
 
     unsigned int col_index = blockIdx.x * WARP_SIZE + lane;
 
-        __half2 sum;
-        sum = __float2half2_rn(0.f);
+    __half2 sum;
+    sum = __float2half2_rn(0.f);
 
-        {
-            int wid = gid << loop_unroll_bits;
-            weight_cast += (wid * output_size + col_index);
+    {
+        int wid = gid << loop_unroll_bits;
+        weight_cast += (wid * output_size + col_index);
 
-            while (wid < hidden_dim) {
-                __half2 vals_f[loop_unroll * (INPUT_TILE1)];
-                {
-                    float2 val_h;
-                    val_h = vals_cast[(wid >> 2)];
+        while (wid < hidden_dim) {
+            __half2 vals_f[loop_unroll * (INPUT_TILE1)];
+            {
+                float2 val_h;
+                val_h = vals_cast[(wid >> 2)];
 
-                    __half* inp_data;
-                    inp_data = reinterpret_cast<__half*>(&val_h);
+                __half* inp_data;
+                inp_data = reinterpret_cast<__half*>(&val_h);
 
-                    vals_f[0] = __halves2half2(inp_data[0], inp_data[0]);
-                    vals_f[1] = __halves2half2(inp_data[1], inp_data[1]);
-                    vals_f[2] = __halves2half2(inp_data[2], inp_data[2]);
-                    vals_f[3] = __halves2half2(inp_data[3], inp_data[3]);
-                }
+                vals_f[0] = __halves2half2(inp_data[0], inp_data[0]);
+                vals_f[1] = __halves2half2(inp_data[1], inp_data[1]);
+                vals_f[2] = __halves2half2(inp_data[2], inp_data[2]);
+                vals_f[3] = __halves2half2(inp_data[3], inp_data[3]);
+            }
 
-                if (col_index < output_size) {
-                    __half2 weight_h[loop_unroll];
+            if (col_index < output_size) {
+                __half2 weight_h[loop_unroll];
 #pragma unroll
-                    for (int k = 0; k < loop_unroll; k++)
-                            weight_h[k] = weight_cast[k * output_size];
+                for (int k = 0; k < loop_unroll; k++) weight_h[k] = weight_cast[k * output_size];
 
 #pragma unroll
                 for (int k = 0; k < (loop_unroll >> inner_loop_unroll_bits); k++)
@@ -1181,52 +1177,52 @@ __global__ void input_tiled_gemm_kernel(__half* output,
                         weight_h[0] = (vals_f[li] * weight_h[li]);
                         sum += weight_h[0];
                     }
-                }
-                wid += (warp_num << loop_unroll_bits);
-                weight_cast += (output_size * (warp_num << loop_unroll_bits));
             }
+            wid += (warp_num << loop_unroll_bits);
+            weight_cast += (output_size * (warp_num << loop_unroll_bits));
         }
-        {
-            const __half2* bias_cast;
-            if (bias) bias_cast = reinterpret_cast<const __half2*>(bias);
-            __shared__ __half2 partial_result[MAX_WARP_NUM * (WARP_SIZE + 1)];
+    }
+    {
+        const __half2* bias_cast;
+        if (bias) bias_cast = reinterpret_cast<const __half2*>(bias);
+        __shared__ __half2 partial_result[MAX_WARP_NUM * (WARP_SIZE + 1)];
 
-            partial_result[gid * (WARP_SIZE + 1) + lane] = sum;
+        partial_result[gid * (WARP_SIZE + 1) + lane] = sum;
 
-            b.sync();
-            float2 sum_f;
-            sum_f = __half22float2(partial_result[lane * (WARP_SIZE + 1) + gid]);
+        b.sync();
+        float2 sum_f;
+        sum_f = __half22float2(partial_result[lane * (WARP_SIZE + 1) + gid]);
 
-            b.sync();
-            #pragma unroll
-            for (int i = 1; i < WARP_SIZE; i *= 2) {
-                sum_f.x += g.shfl_xor(sum_f.x, i);
-                sum_f.y += g.shfl_xor(sum_f.y, i);
-            }
+        b.sync();
+#pragma unroll
+        for (int i = 1; i < WARP_SIZE; i *= 2) {
+            sum_f.x += g.shfl_xor(sum_f.x, i);
+            sum_f.y += g.shfl_xor(sum_f.y, i);
+        }
 
-            if (lane == 0) { partial_result[gid] = __float22half2_rn(sum_f); }
+        if (lane == 0) { partial_result[gid] = __float22half2_rn(sum_f); }
 
-            b.sync();
+        b.sync();
 
-            if (gid == 0) {
-                int col = blockIdx.x * WARP_SIZE + lane;
-                if (col < output_size) {
-                    sum = partial_result[lane];
-                    if (bias) {
-                        float2 bias_f = __half22float2(bias_cast[col]);
-                        sum_f = __half22float2(sum);
-                        sum_f.x += bias_f.x;
-                        sum_f.y += bias_f.y;
-                        if (add_gelu){
-                            sum_f.x = gelu(sum_f.x);
-                            sum_f.y = gelu(sum_f.y);
-                        }
-                        sum = __float22half2_rn(sum_f);
+        if (gid == 0) {
+            int col = blockIdx.x * WARP_SIZE + lane;
+            if (col < output_size) {
+                sum = partial_result[lane];
+                if (bias) {
+                    float2 bias_f = __half22float2(bias_cast[col]);
+                    sum_f = __half22float2(sum);
+                    sum_f.x += bias_f.x;
+                    sum_f.y += bias_f.y;
+                    if (add_gelu) {
+                        sum_f.x = gelu(sum_f.x);
+                        sum_f.y = gelu(sum_f.y);
                     }
-                    output_cast[col] = sum;
+                    sum = __float22half2_rn(sum_f);
                 }
+                output_cast[col] = sum;
             }
         }
+    }
 #endif
 }
 
@@ -1236,7 +1232,8 @@ __global__ void input_tiled_gemm_kernel(float* output,
                                         const float* bias,
                                         int hidden_dim,
                                         int input_size,
-                                        int output_size, bool add_gelu)
+                                        int output_size,
+                                        bool add_gelu)
 {
     cg::thread_block b = cg::this_thread_block();
     cg::thread_block_tile<32> g = cg::tiled_partition<32>(b);
@@ -1349,7 +1346,8 @@ void launch_input_tiled_gemm_kernel(T* output,
                                     int hidden_dim,
                                     int input_size,
                                     int output_size,
-                                    cudaStream_t stream, bool add_gelu)
+                                    cudaStream_t stream,
+                                    bool add_gelu)
 {
     constexpr int threads = 1024;
     output_size /= 2;
@@ -1366,7 +1364,8 @@ template void launch_input_tiled_gemm_kernel(float* output,
                                              int hidden_dim,
                                              int input_size,
                                              int output_size,
-                                             cudaStream_t stream, bool add_gelu);
+                                             cudaStream_t stream,
+                                             bool add_gelu);
 
 template void launch_input_tiled_gemm_kernel(__half* output,
                                              const __half* vals,
@@ -1375,8 +1374,8 @@ template void launch_input_tiled_gemm_kernel(__half* output,
                                              int hidden_dim,
                                              int input_size,
                                              int output_size,
-                                             cudaStream_t stream, bool add_gelu);
-
+                                             cudaStream_t stream,
+                                             bool add_gelu);
 
 #define NORM_REG 32
 
@@ -1455,19 +1454,18 @@ __device__ void layer_nrom_device(__half* output,
 #endif
 }
 
-
 __global__ void input_tiled_gemm_kernel(__half* output,
-    __half* intermediate,
-    const __half* vals,
-    const __half* weight,
-    const __half* gamma,
-    const __half* beta,
-    float epsilon,
-    const __half* bias,
-    int hidden_dim,
-    int input_size,
-    int output_size,
-    int intm_size)
+                                        __half* intermediate,
+                                        const __half* vals,
+                                        const __half* weight,
+                                        const __half* gamma,
+                                        const __half* beta,
+                                        float epsilon,
+                                        const __half* bias,
+                                        int hidden_dim,
+                                        int input_size,
+                                        int output_size,
+                                        int intm_size)
 {
 #if __CUDA_ARCH__ >= 700
 
@@ -1486,18 +1484,18 @@ __global__ void input_tiled_gemm_kernel(__half* output,
     unsigned int col_index = blockIdx.x * WARP_SIZE + lane;
     __half2 sum;
     sum = __float2half2_rn(0.f);
-    //layer_nrom_device((__half*)vals_cast, vals, gamma, beta, epsilon,hidden_dim/2);
-    
+    // layer_nrom_device((__half*)vals_cast, vals, gamma, beta, epsilon,hidden_dim/2);
+
     int id = threadIdx.x;
 
-    {    
+    {
         //__shared__ float2 vals_cast[4096];
         //__half2* input_shared = (__half2*)vals_cast;
         //{
         //    int hidden_half = hidden_dim >> 1;
         //    __half2 inp_reg[8];
         //    int k = 0;
-        //    int input_id = id; 
+        //    int input_id = id;
         //    while (input_id < hidden_half) {
         //        inp_reg[k] = vals_cast1[input_id];
         //        input_shared[input_id] = inp_reg[k++];
@@ -1562,16 +1560,15 @@ __global__ void input_tiled_gemm_kernel(__half* output,
             }
             if (col_index < output_size) {
                 __half2 weight_h[loop_unroll];
-                #pragma unroll
-                for (int k = 0; k < loop_unroll; k++)
-                        weight_h[k] = weight_cast[k * output_size];
-            #pragma unroll
-            for (int k = 0; k < (loop_unroll >> inner_loop_unroll_bits); k++)
-                #pragma unroll
-                for (int li = 0; li < inner_loop_unroll; li++) {
-                    weight_h[0] = (vals_f[li] * weight_h[li]);
-                    sum += weight_h[0];
-                }
+#pragma unroll
+                for (int k = 0; k < loop_unroll; k++) weight_h[k] = weight_cast[k * output_size];
+#pragma unroll
+                for (int k = 0; k < (loop_unroll >> inner_loop_unroll_bits); k++)
+#pragma unroll
+                    for (int li = 0; li < inner_loop_unroll; li++) {
+                        weight_h[0] = (vals_f[li] * weight_h[li]);
+                        sum += weight_h[0];
+                    }
             }
             wid += (warp_num << loop_unroll_bits);
             weight_cast += (output_size * (warp_num << loop_unroll_bits));
@@ -1589,7 +1586,7 @@ __global__ void input_tiled_gemm_kernel(__half* output,
         sum_f = __half22float2(partial_result[lane * (WARP_SIZE + 1) + gid]);
 
         b.sync();
-        #pragma unroll
+#pragma unroll
         for (int i = 1; i < WARP_SIZE; i *= 2) {
             sum_f.x += g.shfl_xor(sum_f.x, i);
             sum_f.y += g.shfl_xor(sum_f.y, i);
@@ -1601,9 +1598,9 @@ __global__ void input_tiled_gemm_kernel(__half* output,
         int bias_offset = output_size - intm_size;
         if (gid == 0) {
             int col = blockIdx.x * WARP_SIZE + lane;
-            if (col < output_size){
+            if (col < output_size) {
                 sum = partial_result[lane];
-                if (col >= bias_offset){
+                if (col >= bias_offset) {
                     float2 bias_f = __half22float2(bias_cast[col - bias_offset]);
                     sum_f = __half22float2(sum);
                     sum_f.x += bias_f.x;
@@ -1612,8 +1609,8 @@ __global__ void input_tiled_gemm_kernel(__half* output,
                     sum_f.y = gelu(sum_f.y);
                     sum = __float22half2_rn(sum_f);
                     intm_cast[col - bias_offset] = sum;
-                }
-                else output_cast[col] = sum;
+                } else
+                    output_cast[col] = sum;
             }
         }
     }
@@ -1621,23 +1618,23 @@ __global__ void input_tiled_gemm_kernel(__half* output,
 }
 
 __global__ void input_tiled_gemm_kernel(float* output,
-    float* intermediate,
-    const float* vals,
-    const float* weight,
-    const float* gamma,
-    const float* beta,
-    float epsilon,
-    const float* bias,
-    int hidden_dim,
-    int input_size,
-    int output_size,
-    int intm_size)
+                                        float* intermediate,
+                                        const float* vals,
+                                        const float* weight,
+                                        const float* gamma,
+                                        const float* beta,
+                                        float epsilon,
+                                        const float* bias,
+                                        int hidden_dim,
+                                        int input_size,
+                                        int output_size,
+                                        int intm_size)
 {
- 
 }
 
 template <typename T>
-void launch_input_tiled_gemm_kernel(T* output, T* intermediate,
+void launch_input_tiled_gemm_kernel(T* output,
+                                    T* intermediate,
                                     const T* vals,
                                     const T* weight,
                                     const T* gamma,
@@ -1654,11 +1651,22 @@ void launch_input_tiled_gemm_kernel(T* output, T* intermediate,
     output_size /= 2;
     dim3 grid_dim((output_size - 1) / WARP_SIZE + 1);
     dim3 block_dim(threads);
-    input_tiled_gemm_kernel<<<grid_dim, block_dim, 0, stream>>>(
-        output, intermediate, vals, weight, gamma, beta, epsilon, bias, hidden_dim, input_size, output_size, intm_size/2);
+    input_tiled_gemm_kernel<<<grid_dim, block_dim, 0, stream>>>(output,
+                                                                intermediate,
+                                                                vals,
+                                                                weight,
+                                                                gamma,
+                                                                beta,
+                                                                epsilon,
+                                                                bias,
+                                                                hidden_dim,
+                                                                input_size,
+                                                                output_size,
+                                                                intm_size / 2);
 }
 
-template void launch_input_tiled_gemm_kernel(float* output,float* intermediate,
+template void launch_input_tiled_gemm_kernel(float* output,
+                                             float* intermediate,
                                              const float* vals,
                                              const float* weight,
                                              const float* gamma,
@@ -1671,7 +1679,8 @@ template void launch_input_tiled_gemm_kernel(float* output,float* intermediate,
                                              int intm_size,
                                              cudaStream_t stream);
 
-template void launch_input_tiled_gemm_kernel(__half* output,__half* intermediate,
+template void launch_input_tiled_gemm_kernel(__half* output,
+                                             __half* intermediate,
                                              const __half* vals,
                                              const __half* weight,
                                              const __half* gamma,

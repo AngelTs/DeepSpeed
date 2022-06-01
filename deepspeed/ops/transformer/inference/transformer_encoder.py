@@ -17,6 +17,7 @@ inference_cuda_module = None
 
 from .transformer_inference import DeepSpeedInferenceConfig, DeepSpeedSelfAttention, DeepSpeedMLP
 
+
 class DeepSpeedEncoderFunction(Function):
     @staticmethod
     def forward(ctx,
@@ -31,10 +32,24 @@ class DeepSpeedEncoderFunction(Function):
                 config,
                 func,
                 norm_factor):
-        func(input, mask, input_norm, attn_weights, attn_biases, attn_norm, mlp_weights, mlp_biases, 
-            config.heads, config.pre_layer_norm, config.epsilon, norm_factor, config.q_int8, 
-            mlp_weights[1].scale, mlp_weights[0].scale, attn_weights[1].scale,
-            config.enable_qkv_quantization, attn_weights[0].scale)
+        func(input,
+             mask,
+             input_norm,
+             attn_weights,
+             attn_biases,
+             attn_norm,
+             mlp_weights,
+             mlp_biases,
+             config.heads,
+             config.pre_layer_norm,
+             config.epsilon,
+             norm_factor,
+             config.q_int8,
+             mlp_weights[1].scale,
+             mlp_weights[0].scale,
+             attn_weights[1].scale,
+             config.enable_qkv_quantization,
+             attn_weights[0].scale)
 
         if config.return_tuple:
             return (input, )
@@ -103,7 +118,8 @@ class DeepSpeedEncoder(nn.Module):
         self.norm_b = nn.Parameter(torch.Tensor(self.config.hidden_size))
         self.encoder_func = inference_cuda_module.encoder_fp16 if config.fp16 or config.q_int8 else \
                                     inference_cuda_module.encoder_fp32
-        self.attention.norm_factor = (1 / self.attention.norm_factor) ** 2
+        self.attention.norm_factor = (1 / self.attention.norm_factor)**2
+
     def forward(self,
                 input=None,
                 input_mask=None,
@@ -121,16 +137,24 @@ class DeepSpeedEncoder(nn.Module):
                 use_cache=False,
                 output_attentions=False):
 
-        input_mask = (input_mask if attn_mask is None else attn_mask) if attention_mask is None else attention_mask
+        input_mask = (input_mask if attn_mask is None else
+                      attn_mask) if attention_mask is None else attention_mask
         input = x if input is None else input
-        return DeepSpeedEncoderFunction.apply(input,
-                                          input_mask,
-                                          [self.attention.attn_qkvw, self.attention.attn_ow],
-                                          [self.attention.attn_qkvb, self.attention.attn_ob],
-                                          [self.mlp.inter_w, self.mlp.output_w],
-                                          [self.mlp.inter_b, self.mlp.output_b],
-                                          [self.mlp.attn_nw, self.mlp.attn_nb],
-                                          [self.norm_w, self.norm_b],
-                                          self.config,
-                                          self.encoder_func,
-                                          self.attention.norm_factor)
+        return DeepSpeedEncoderFunction.apply(
+            input,
+            input_mask,
+            [self.attention.attn_qkvw,
+             self.attention.attn_ow],
+            [self.attention.attn_qkvb,
+             self.attention.attn_ob],
+            [self.mlp.inter_w,
+             self.mlp.output_w],
+            [self.mlp.inter_b,
+             self.mlp.output_b],
+            [self.mlp.attn_nw,
+             self.mlp.attn_nb],
+            [self.norm_w,
+             self.norm_b],
+            self.config,
+            self.encoder_func,
+            self.attention.norm_factor)

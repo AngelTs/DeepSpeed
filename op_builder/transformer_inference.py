@@ -24,7 +24,6 @@ class InferenceBuilder(CUDAOpBuilder):
             'csrc/transformer/inference/csrc/apply_rotary_pos_emb.cu',
         ]
 
-
     def extra_ldflags(self):
         import deepspeed
         import os

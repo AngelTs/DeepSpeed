@@ -43,7 +43,6 @@ __global__ void attn_softmax_v2(__half* vals,
                                 int iterations,
                                 int reduceWidth)
 {
-
     cg::thread_block b = cg::this_thread_block();
     cg::thread_block_tile<WARP_SIZE> g = cg::tiled_partition<WARP_SIZE>(b);
 
@@ -456,8 +455,7 @@ __device__ void attn_score(__half* shared_soft,
     __half2 queries_high[MAX_ATTN_REG];
 
     float2* query_cast = reinterpret_cast<float2*>(query);
-    float2* key_cast = reinterpret_cast<float2*>(is_prompt ? 
-        query + (hidden << 1) : key_merged);
+    float2* key_cast = reinterpret_cast<float2*>(is_prompt ? query + (hidden << 1) : key_merged);
 
     float2* key_merged_cast = reinterpret_cast<float2*>(key_merged);
     float2* new_key_cast = reinterpret_cast<float2*>(query + (hidden << 1));
@@ -507,7 +505,8 @@ __device__ void attn_score(__half* shared_soft,
                         int p = 0;
                         while (row < inp_size) {
                             float2 key_value_reg = key_cast[row];
-                            if (is_prompt && (key_merged != nullptr) && (input_offset % num_seq) == 0)
+                            if (is_prompt && (key_merged != nullptr) &&
+                                (input_offset % num_seq) == 0)
                                 key_merged_cast[row] = key_value_reg;
                             __half2* key_value = reinterpret_cast<__half2*>(&key_value_reg);
 
@@ -521,7 +520,7 @@ __device__ void attn_score(__half* shared_soft,
                             row += WARP_SIZE;
                             p++;
                         }
-                        key_cast += hidden31; //(hidden >> 1);
+                        key_cast += hidden31;  //(hidden >> 1);
                         if (is_prompt && (key_merged != nullptr) && (input_offset % num_seq) == 0)
                             key_merged_cast += (hidden >> 1);
 #pragma unroll
@@ -545,18 +544,17 @@ __device__ void attn_score(__half* shared_soft,
             }
             if (!is_prompt && key_merged != nullptr) {
                 new_key_cast += ((input_offset / num_seq) * inp_size);
-                
+
                 key_merged_cast = reinterpret_cast<float2*>(key_merged);
                 key_merged_cast +=
                     (input_offset / num_seq) * inp_size + ((hidden >> 1) * value_length);
-                
+
                 row = lane;
                 int p = 0;
                 float score = 0;
                 while (row < inp_size) {
                     float2 new_key_data = new_key_cast[row];
-                    if ((input_offset % num_seq) == 0)
-                        key_merged_cast[row] = new_key_data;
+                    if ((input_offset % num_seq) == 0) key_merged_cast[row] = new_key_data;
                     __half2* key_value = reinterpret_cast<__half2*>(&new_key_data);
 
                     key_value[0] *= norm_factor_h;
@@ -605,8 +603,7 @@ __device__ void attn_score(float* shared_soft,
     bool is_prompt = (value_length == num_seq);
     float2 query_value[8];
     float2* query_cast = reinterpret_cast<float2*>(query);
-    float2* key_cast = reinterpret_cast<float2*>(is_prompt ? 
-        query + (hidden << 1) : key_merged);
+    float2* key_cast = reinterpret_cast<float2*>(is_prompt ? query + (hidden << 1) : key_merged);
     float2* key_merged_cast;
     if (merging) key_merged_cast = reinterpret_cast<float2*>(key_merged);
     float2* new_key_cast = reinterpret_cast<float2*>(query + (hidden << 1));
@@ -1037,12 +1034,11 @@ __device__ void attn_context(__half2* shared_soft1,
     int lane = threadIdx.x & 0x1f;
     int warp_num = blockDim.x >> 5;
     bool is_prompt = (value_length == num_seq);
-    __half2* value_cast = reinterpret_cast<__half2*>(is_prompt ?
-        prev_value + 2 * (hidden << 1) : merged_value
-    );
+    __half2* value_cast =
+        reinterpret_cast<__half2*>(is_prompt ? prev_value + 2 * (hidden << 1) : merged_value);
     __half2* new_value_cast = reinterpret_cast<__half2*>(prev_value + 2 * (hidden << 1));
     __half2* merged_value_cast = reinterpret_cast<__half2*>(merged_value);
-    int hidden31 = is_prompt ? (hidden) * 3 : (hidden);
+    int hidden31 = is_prompt ? (hidden)*3 : (hidden);
 
     int col_id = (blockIdx.x * warp_num + wid);
     int offset = col_id / num_seq;
@@ -1105,9 +1101,10 @@ __device__ void attn_context(__half2* shared_soft1,
                 if (merged_value != nullptr) merged_value_cast += WARP_SIZE;
                 iter++;
             }
-            value_cast = reinterpret_cast<__half2*>(is_prompt ?
-                prev_value + 2 * (hidden << 1) : merged_value);
-            if (merged_value != nullptr) merged_value_cast = reinterpret_cast<__half2*>(merged_value);
+            value_cast = reinterpret_cast<__half2*>(is_prompt ? prev_value + 2 * (hidden << 1)
+                                                              : merged_value);
+            if (merged_value != nullptr)
+                merged_value_cast = reinterpret_cast<__half2*>(merged_value);
             wid_iter += 4;
             offset += (hidden31 << 2);
             merge_offset += (hidden << 2);
@@ -1128,8 +1125,7 @@ __device__ void attn_context(__half2* shared_soft1,
                 float2 mul = __half22float2(vals_f * new_value_data);
                 sum[p].x += mul.x;
                 sum[p].y += mul.y;
-                if ((col_id % num_seq) == 0)
-                    merged_value_cast[merge_offset] = new_value_data;
+                if ((col_id % num_seq) == 0) merged_value_cast[merge_offset] = new_value_data;
                 row += WARP_SIZE;
                 offset1 += WARP_SIZE;
                 merge_offset += WARP_SIZE;
@@ -1173,8 +1169,8 @@ __device__ void attn_context(float2* shared_soft1,
     int lane = threadIdx.x & 0x1f;
     int warp_num = blockDim.x >> 5;
     bool is_prompt = (num_seq == value_length);
-    float2* value_cast = reinterpret_cast<float2*>(is_prompt ?
-        prev_value + 2 * (hidden << 1) : merged_value);
+    float2* value_cast =
+        reinterpret_cast<float2*>(is_prompt ? prev_value + 2 * (hidden << 1) : merged_value);
     float2* new_value_cast = reinterpret_cast<float2*>(prev_value + 2 * (hidden << 1));
     float2* merged_value_cast;
     if (merging) merged_value_cast = reinterpret_cast<float2*>(merged_value);
@@ -1325,7 +1321,7 @@ __global__ void attn_softmax_context(__half* output,
         }
         // Attention_Context
         attn_context(shared_soft1,
-                     query, //prev_value,
+                     query,  // prev_value,
                      merged_value,
                      merging,
                      output,

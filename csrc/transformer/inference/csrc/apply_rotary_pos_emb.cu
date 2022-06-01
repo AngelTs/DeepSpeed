@@ -155,7 +155,7 @@ __global__ void apply_rotary_pos_emb1(__half* mixed_query,
     unsigned head_id = blockIdx.x * MAX_WARP_NUM + gid;
     unsigned seq_index = head_id % seq_len;
     unsigned offset = head_id * head_size;
-    unsigned k_offset = (seq_index + (head_id / seq_len) * MAX_OUT_TOKES) * head_size ;
+    unsigned k_offset = (seq_index + (head_id / seq_len) * MAX_OUT_TOKES) * head_size;
 
     constexpr unsigned mask[32] = {
         0x1 | 0x1000,     0x2 | 0x2000,     0x4 | 0x4000,     0x8 | 0x8000,     0x10 | 0x10000,
@@ -239,4 +239,3 @@ template void launch_apply_rotary_pos_emb<__half>(__half*,
                                                   bool,
                                                   bool,
                                                   cudaStream_t);
-
