@@ -340,8 +340,6 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
     if (is_prompt) Context::Instance().reset_tokens(seq_len);
     unsigned soft_len = Context::Instance().current_tokens();
 
-    // printf("seq: %d, soft: %d \n", seq_len, soft_len);
-
     int k = hidden_dim / heads;
     auto options = at::TensorOptions()
                        .dtype(query_key_value.options().dtype())
@@ -444,6 +442,7 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
                                     norm_factor,
                                     (workspace + offset),
                                     (workspace + offset + value_offset),
+                                    (T*)nullptr,
                                     true,
                                     (triangular && is_prompt),
                                     is_prompt,  // recompute
@@ -1621,14 +1620,12 @@ void TransformerEncoder(at::Tensor& input,
                           new_stream);
     if (enable_qkv_quantization) {
         int out_size = attn_weights[0].size(0);
-
         launch_me((int8_t*)aux_buff,
                   (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                  (__half*)(preln ? buf_2 : input_ptr),
+                  (__half*)(preln ? buf_0 : input_ptr),
                   input.size(2),
                   bsz_seq,
                   Context::Instance().GetCurrentStream());
-
         run_gemm(aux_buff,
                  attn_weights[0].data_ptr(),
                  buf_1,
@@ -1650,10 +1647,11 @@ void TransformerEncoder(at::Tensor& input,
                        &alpha,
                        &gemm_beta,
                        (T*)attn_weights[0].data_ptr(),
-                       preln ? buf_2 : input_ptr,
+                       preln ? buf_0 : input_ptr,
                        buf_1,
                        CUBLAS_GEMM_DEFAULT_TENSOR_OP);
     }
+
     if (_seq_length >= 32 || (bsz * (hidden_dim / num_heads)) > 128) {
         launch_bias_add_transform_0213<T>(buf_2,
                                           buf_1,
@@ -1702,7 +1700,7 @@ void TransformerEncoder(at::Tensor& input,
                                     &gemm_beta,
                                     buf_2 + 2 * small_buf_size,
                                     buf_3,
-                                    buf_1,
+                                    buf_0,
                                     CUBLAS_OP_N,
                                     CUBLAS_OP_N,
                                     seq_head,
@@ -1711,12 +1709,13 @@ void TransformerEncoder(at::Tensor& input,
                                     bsz_heads,
                                     CUBLAS_GEMM_DEFAULT_TENSOR_OP);
     } else {
-        launch_attn_softmax_context((T*)buf_1,
-                                    (T*)buf_2,
+        launch_attn_softmax_context((T*)buf_0,
+                                    (T*)buf_1,
                                     (T*)input_mask.data_ptr(),
                                     norm_factor,
                                     (T*)nullptr,
                                     (T*)nullptr,
+                                    (T*)attn_biases[0].data_ptr(),
                                     true,
                                     false,
                                     true,
@@ -1730,17 +1729,15 @@ void TransformerEncoder(at::Tensor& input,
                                     at::cuda::getCurrentCUDAStream());
     }
     launch_transform4d_0213<T>(
-        buf_2, buf_1, bsz, num_heads, _seq_length, hidden_dim, new_stream, 1);
+        buf_2, buf_0, bsz, num_heads, _seq_length, hidden_dim, new_stream, 1);
     if (q_int8) {
         int out_size = attn_weights[1].size(0);
-
         launch_me((int8_t*)aux_buff,
                   (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                   (__half*)buf_2,
                   input.size(2),
                   bsz_seq,
                   Context::Instance().GetCurrentStream());
-
         run_gemm(aux_buff,
                  attn_weights[1].data_ptr(),
                  buf_1,
@@ -1766,7 +1763,6 @@ void TransformerEncoder(at::Tensor& input,
                        buf_1,
                        CUBLAS_GEMM_DEFAULT_TENSOR_OP);
     }
-
     launch_residual_layer_norm1<T>(buf_4,
                                    buf_1,
                                    input_ptr,

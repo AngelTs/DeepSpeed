@@ -50,7 +50,6 @@ class DeepSpeedEncoderFunction(Function):
              attn_weights[1].scale,
              config.enable_qkv_quantization,
              attn_weights[0].scale)
-
         if config.return_tuple:
             return (input, )
         else:

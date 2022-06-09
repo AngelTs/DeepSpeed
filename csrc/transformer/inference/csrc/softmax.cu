@@ -125,7 +125,6 @@ __global__ void attn_softmax_v2(__half* vals,
                             high_data[i].x += __half2float(mask[data_id + mask_offset + 2]);
                     }
                 }
-                // if(lane == 0) printf("%f , %d, %d \n", low_data[i].x, data_id, seq_id);
                 max_val = (low_data[i].x > max_val ? low_data[i].x : max_val);
                 max_val = (low_data[i].y > max_val ? low_data[i].y : max_val);
                 max_val = (high_data[i].x > max_val ? high_data[i].x : max_val);
@@ -310,16 +309,12 @@ __global__ void attn_softmax_v2(float* vals,
         if (reduceWidth > WARP_SIZE) {
             if (lane == 0) partialSum[wid] = max_val;
             b.sync();
-
             if (lane < warp_num) max_val = partialSum[lane];
-
             b.sync();
-
             for (int i = 1; i < reduce_blocks; i *= 2) {
                 auto temp = g.shfl_xor(max_val, i);
                 max_val = (temp > max_val ? temp : max_val);
             }
-
             max_val = g.shfl(max_val, threadIdx.x / WARP_SIZE);
         }
 
@@ -338,13 +333,9 @@ __global__ void attn_softmax_v2(float* vals,
         if (reduceWidth > WARP_SIZE) {
             if (lane == 0) partialSum[wid] = sum;
             b.sync();
-
             if (lane < warp_num) sum = partialSum[lane];
-
             b.sync();
-
             for (int i = 1; i < reduce_blocks; i *= 2) { sum += g.shfl_xor(sum, i); }
-
             sum = g.shfl(sum, threadIdx.x / WARP_SIZE);
         }
         sum += 1e-6;
@@ -436,6 +427,7 @@ template void launch_attn_softmax_v2(__half* vals,
 __device__ void attn_score(__half* shared_soft,
                            __half* query,
                            __half* key_merged,
+                           __half* attn_bias,
                            bool merging,
                            float norm_factor,
                            int inp_size,
@@ -456,6 +448,7 @@ __device__ void attn_score(__half* shared_soft,
 
     float2* query_cast = reinterpret_cast<float2*>(query);
     float2* key_cast = reinterpret_cast<float2*>(is_prompt ? query + (hidden << 1) : key_merged);
+    float2* bias_cast = reinterpret_cast<float2*>(attn_bias);
 
     float2* key_merged_cast = reinterpret_cast<float2*>(key_merged);
     float2* new_key_cast = reinterpret_cast<float2*>(query + (hidden << 1));
@@ -467,7 +460,7 @@ __device__ void attn_score(__half* shared_soft,
     if (input_offset < total_count) {
         query_cast +=
             (input_offset % num_seq) * (hidden >> 1) * 3 + (input_offset / num_seq) * inp_size;
-
+        bias_cast += (input_offset / num_seq) * inp_size;
         int row = lane;
         int p = 0;
 
@@ -476,8 +469,15 @@ __device__ void attn_score(__half* shared_soft,
 
             __half2* query_value = reinterpret_cast<__half2*>(&querie);
 
-            queries_low[p] = query_value[0] * norm_factor_h;
-            queries_high[p] = query_value[1] * norm_factor_h;
+            if (attn_bias) {
+                float2 bias_reg = bias_cast[row];
+                __half2* bias_value = reinterpret_cast<__half2*>(&bias_reg);
+                query_value[0] += bias_value[0];
+                query_value[1] += bias_value[1];
+            } else {
+                queries_low[p] = query_value[0] * norm_factor_h;
+                queries_high[p] = query_value[1] * norm_factor_h;
+            }
 
             p++;
             row += WARP_SIZE;
@@ -488,6 +488,7 @@ __device__ void attn_score(__half* shared_soft,
         key_cast += (seq_key * inp_size);
         if (key_merged != nullptr) key_merged_cast += (seq_key * inp_size);
 
+        bias_cast += (hidden >> 1);
         int key_size = total_count / num_seq;
         int score_index = 0;
 
@@ -510,13 +511,19 @@ __device__ void attn_score(__half* shared_soft,
                                 key_merged_cast[row] = key_value_reg;
                             __half2* key_value = reinterpret_cast<__half2*>(&key_value_reg);
 
+                            if (attn_bias) {
+                                float2 bias_reg = bias_cast[row];
+                                __half2* bias_value = reinterpret_cast<__half2*>(&bias_reg);
+                                key_value[0] += bias_value[0];
+                                key_value[1] += bias_value[1];
+                            }
                             key_value[0] *= norm_factor_h;
                             key_value[1] *= norm_factor_h;
 
                             float2 mul[2];
                             mul[0] = __half22float2(queries_low[p] * key_value[0]);
                             mul[1] = __half22float2(queries_high[p] * key_value[1]);
-                            scores[k] += (mul[0].x + mul[0].y) + (mul[1].x + mul[1].y);
+                            scores[k] = (mul[0].x + mul[0].y) + (mul[1].x + mul[1].y);
                             row += WARP_SIZE;
                             p++;
                         }
@@ -585,6 +592,7 @@ __device__ void attn_score(__half* shared_soft,
 __device__ void attn_score(float* shared_soft,
                            float* query,
                            float* key_merged,
+                           float* attn_bias,
                            bool merging,
                            float norm_factor,
                            int inp_size,
@@ -603,24 +611,30 @@ __device__ void attn_score(float* shared_soft,
     bool is_prompt = (value_length == num_seq);
     float2 query_value[8];
     float2* query_cast = reinterpret_cast<float2*>(query);
+    float2* bias_cast = reinterpret_cast<float2*>(attn_bias);
     float2* key_cast = reinterpret_cast<float2*>(is_prompt ? query + (hidden << 1) : key_merged);
     float2* key_merged_cast;
     if (merging) key_merged_cast = reinterpret_cast<float2*>(key_merged);
     float2* new_key_cast = reinterpret_cast<float2*>(query + (hidden << 1));
-
     int input_offset = (blockIdx.x * warp_num + wid);
 
+    int hidden31 = is_prompt ? hidden * 3 : hidden;
     if (input_offset < total_count) {
-        query_cast += (input_offset % num_seq) * (hidden) + (input_offset / num_seq) * inp_size;
-
+        query_cast += (input_offset % num_seq) * (hidden * 3) + (input_offset / num_seq) * inp_size;
+        bias_cast += (input_offset / num_seq) * inp_size;
         int row = lane;
         int p = 0;
 
         while (row < inp_size) {
             query_value[p] = query_cast[row];
-
-            query_value[p].x *= norm_factor;
-            query_value[p].y *= norm_factor;
+            if (attn_bias) {
+                float2 bias_reg = bias_cast[row];
+                query_value[p].x += bias_reg.x;
+                query_value[p].y += bias_reg.y;
+            } else {
+                query_value[p].x *= norm_factor;
+                query_value[p].y *= norm_factor;
+            }
 
             p++;
             row += WARP_SIZE;
@@ -629,7 +643,7 @@ __device__ void attn_score(float* shared_soft,
         int seq_key = input_offset / num_seq;
 
         int unique_id = input_offset % num_seq;
-
+        bias_cast += hidden;
         key_cast += (seq_key * inp_size);
         key_merged_cast += (seq_key * inp_size);
 
@@ -650,10 +664,16 @@ __device__ void attn_score(float* shared_soft,
                         int p = 0;
                         while (row < inp_size) {
                             float2 key_value = key_cast[row];
-                            if (merging && unique_id == 0) key_merged_cast[row] = key_value;
-
+                            if (attn_bias) {
+                                float2 bias_reg = bias_cast[row];
+                                key_value.x += bias_reg.x;
+                                key_value.y += bias_reg.y;
+                            }
                             key_value.x *= norm_factor;
                             key_value.y *= norm_factor;
+
+                            if (is_prompt && (key_merged != nullptr) && unique_id == 0)
+                                key_merged_cast[row] = key_value;
 
                             float2 mul;
                             mul.x = query_value[p].x * key_value.x;
@@ -662,8 +682,9 @@ __device__ void attn_score(float* shared_soft,
                             row += WARP_SIZE;
                             p++;
                         }
-                        key_cast += (hidden);
-                        if (merging && unique_id == 0) key_merged_cast += (hidden);
+                        key_cast += hidden31;
+                        if (is_prompt && (key_merged != nullptr) && unique_id == 0)
+                            key_merged_cast += (hidden);
 #pragma unroll
                         for (int w = 1; w < WARP_SIZE; w *= 2)
                             scores[k] += g.shfl_xor(scores[k], w);
@@ -681,7 +702,7 @@ __device__ void attn_score(float* shared_soft,
                     }
                 }
             }
-            if (!is_prompt) {
+            if (!is_prompt && key_merged != nullptr) {
                 new_key_cast += (((blockIdx.x * warp_num + wid) / num_seq) * inp_size);
                 if (merging) {
                     key_merged_cast = reinterpret_cast<float2*>(key_merged);
@@ -1017,6 +1038,7 @@ __device__ void attn_softmax(float* shared_soft,
 __device__ void attn_context(__half2* shared_soft1,
                              __half* prev_value,
                              __half* merged_value,
+                             __half* attn_bias,
                              bool merging,
                              __half* output,
                              int value_length,
@@ -1038,6 +1060,8 @@ __device__ void attn_context(__half2* shared_soft1,
         reinterpret_cast<__half2*>(is_prompt ? prev_value + 2 * (hidden << 1) : merged_value);
     __half2* new_value_cast = reinterpret_cast<__half2*>(prev_value + 2 * (hidden << 1));
     __half2* merged_value_cast = reinterpret_cast<__half2*>(merged_value);
+    __half2* bias_cast;
+    if (attn_bias) bias_cast = reinterpret_cast<__half2*>(attn_bias + 2 * (hidden << 1));
     int hidden31 = is_prompt ? (hidden)*3 : (hidden);
 
     int col_id = (blockIdx.x * warp_num + wid);
@@ -1068,6 +1092,7 @@ __device__ void attn_context(__half2* shared_soft1,
             int row = lane;
             int iter = 0;
             value_cast += offset;
+            bias_cast += offset;
             if (merged_value != nullptr) merged_value_cast += merge_offset;
             while (row < head_size) {
                 __half2 weight_h[4];
@@ -1081,6 +1106,14 @@ __device__ void attn_context(__half2* shared_soft1,
                     for (int f = 0; f < 4; f++)
                         if ((wid_iter + f) < value_length)
                             merged_value_cast[f * hidden] = weight_h[f];
+                }
+                if (attn_bias) {
+                    __half2 bias_reg = bias_cast[0];
+#pragma unroll
+                    for (int f = 0; f < 4; f++) {
+                        weight_h[f].x += bias_reg.x;
+                        weight_h[f].y += bias_reg.y;
+                    }
                 }
                 {
                     float2 mul[4];
@@ -1098,6 +1131,7 @@ __device__ void attn_context(__half2* shared_soft1,
                 }
                 row += (WARP_SIZE);
                 value_cast += (WARP_SIZE);
+                bias_cast += WARP_SIZE;
                 if (merged_value != nullptr) merged_value_cast += WARP_SIZE;
                 iter++;
             }
@@ -1105,6 +1139,7 @@ __device__ void attn_context(__half2* shared_soft1,
                                                               : merged_value);
             if (merged_value != nullptr)
                 merged_value_cast = reinterpret_cast<__half2*>(merged_value);
+            if (attn_bias) bias_cast = reinterpret_cast<__half2*>(attn_bias + 2 * (hidden << 1));
             wid_iter += 4;
             offset += (hidden31 << 2);
             merge_offset += (hidden << 2);
@@ -1149,6 +1184,7 @@ __device__ void attn_context(__half2* shared_soft1,
 __device__ void attn_context(float2* shared_soft1,
                              float* prev_value,
                              float* merged_value,
+                             float* attn_bias,
                              bool merging,
                              float* output,
                              int value_length,
@@ -1169,12 +1205,14 @@ __device__ void attn_context(float2* shared_soft1,
     int lane = threadIdx.x & 0x1f;
     int warp_num = blockDim.x >> 5;
     bool is_prompt = (num_seq == value_length);
+    float2* bias_cast;
+    if (attn_bias) bias_cast = reinterpret_cast<float2*>(attn_bias + 2 * (hidden << 1));
     float2* value_cast =
         reinterpret_cast<float2*>(is_prompt ? prev_value + 2 * (hidden << 1) : merged_value);
     float2* new_value_cast = reinterpret_cast<float2*>(prev_value + 2 * (hidden << 1));
     float2* merged_value_cast;
     if (merging) merged_value_cast = reinterpret_cast<float2*>(merged_value);
-
+    int hidden31 = is_prompt ? (hidden)*3 : (hidden);
     int offset = (blockIdx.x * warp_num + wid) / num_seq;
     int value_size = total_count / num_seq;
     int unique_id = (blockIdx.x * warp_num + wid) % num_seq;
@@ -1201,11 +1239,18 @@ __device__ void attn_context(float2* shared_soft1,
                 float2 weight[2];
                 weight[0] = value_cast[offset1];
                 weight[1] =
-                    ((wid_iter + 1) < value_length ? value_cast[hidden + offset1] : ZERO_f2);
-                if (merging && unique_id == 0) {
+                    ((wid_iter + 1) < value_length ? value_cast[hidden31 + offset1] : ZERO_f2);
+                if ((merged_value != nullptr) && unique_id == 0) {
                     merged_value_cast[merge_offset1] = weight[0];
                     if ((wid_iter + 1) < value_length)
                         merged_value_cast[hidden + merge_offset1] = weight[1];
+                }
+                if (attn_bias) {
+                    float2 bias_reg = bias_cast[offset1 % hidden];
+                    weight[0].x += bias_reg.x;
+                    weight[0].y += bias_reg.y;
+                    weight[1].x += bias_reg.x;
+                    weight[1].y += bias_reg.y;
                 }
                 float2 mul[2];
                 {
@@ -1223,11 +1268,11 @@ __device__ void attn_context(float2* shared_soft1,
                 iter++;
             }
             wid_iter += 2;
-            offset += (hidden * 2);
+            offset += (hidden31 * 2);
             merge_offset += (hidden * 2);
         }
 
-        if (!is_prompt) {
+        if (!is_prompt && (merged_value != nullptr)) {
             int row = lane;
             int merge_offset = ((blockIdx.x * warp_num + wid) / num_seq) * head_size + lane +
                                (value_length * hidden);
@@ -1273,6 +1318,7 @@ __global__ void attn_softmax_context(__half* output,
                                      float norm_factor,
                                      __half* key_merged,
                                      __half* merged_value,
+                                     __half* attn_bias,
                                      bool merging,
                                      bool triangular,
                                      bool recompute,
@@ -1300,6 +1346,7 @@ __global__ void attn_softmax_context(__half* output,
             attn_score(shared_soft,
                        query,
                        key_merged,
+                       attn_bias,
                        merging,
                        norm_factor,
                        (head_size >> 1),
@@ -1323,6 +1370,7 @@ __global__ void attn_softmax_context(__half* output,
         attn_context(shared_soft1,
                      query,  // prev_value,
                      merged_value,
+                     attn_bias,
                      merging,
                      output,
                      value_length,
@@ -1341,6 +1389,7 @@ __global__ void attn_softmax_context(float* output,
                                      float norm_factor,
                                      float* key_merged,
                                      float* merged_value,
+                                     float* attn_bias,
                                      bool merging,
                                      bool triangular,
                                      bool recompute,
@@ -1369,6 +1418,7 @@ __global__ void attn_softmax_context(float* output,
             attn_score(shared_soft,
                        query,
                        key_merged,
+                       attn_bias,
                        merging,
                        norm_factor,
                        head_size,
@@ -1386,12 +1436,14 @@ __global__ void attn_softmax_context(float* output,
                                 seq_length,
                                 triangular,
                                 recompute);
+            // return;
             b.sync();
         }
         // Attention_Context
         attn_context(shared_soft1,
                      query,
                      merged_value,
+                     attn_bias,
                      merging,
                      output,
                      value_length,
@@ -1410,6 +1462,7 @@ void launch_attn_softmax_context(T* out,
                                  float norm_factor,
                                  T* key_merged,
                                  T* merged_value,
+                                 T* attn_bias,
                                  bool merging,
                                  bool triangular,
                                  bool recompute,
@@ -1433,6 +1486,7 @@ void launch_attn_softmax_context(T* out,
                                                                         norm_factor,
                                                                         key_merged,
                                                                         merged_value,
+                                                                        attn_bias,
                                                                         merging,
                                                                         triangular,
                                                                         recompute,
@@ -1450,6 +1504,7 @@ void launch_attn_softmax_context(T* out,
                                                                         norm_factor,
                                                                         key_merged,
                                                                         merged_value,
+                                                                        attn_bias,
                                                                         merging,
                                                                         triangular,
                                                                         recompute,
@@ -1467,6 +1522,7 @@ void launch_attn_softmax_context(T* out,
                                                                         norm_factor,
                                                                         key_merged,
                                                                         merged_value,
+                                                                        attn_bias,
                                                                         merging,
                                                                         triangular,
                                                                         recompute,
@@ -1484,6 +1540,7 @@ void launch_attn_softmax_context(T* out,
                                                                         norm_factor,
                                                                         key_merged,
                                                                         merged_value,
+                                                                        attn_bias,
                                                                         merging,
                                                                         triangular,
                                                                         recompute,
@@ -1501,6 +1558,7 @@ void launch_attn_softmax_context(T* out,
                                                                          norm_factor,
                                                                          key_merged,
                                                                          merged_value,
+                                                                         attn_bias,
                                                                          merging,
                                                                          triangular,
                                                                          recompute,
@@ -1518,6 +1576,7 @@ void launch_attn_softmax_context(T* out,
                                                                          norm_factor,
                                                                          key_merged,
                                                                          merged_value,
+                                                                         attn_bias,
                                                                          merging,
                                                                          triangular,
                                                                          recompute,
@@ -1540,6 +1599,7 @@ template void launch_attn_softmax_context(float* out,
                                           float norm_factor,
                                           float* key_merged,
                                           float* merged_value,
+                                          float* attn_bias,
                                           bool merging,
                                           bool triangular,
                                           bool recompute,
@@ -1558,6 +1618,7 @@ template void launch_attn_softmax_context(__half* out,
                                           float norm_factor,
                                           __half* key_merged,
                                           __half* merged_value,
+                                          __half* attn_bias,
                                           bool merging,
                                           bool triangular,
                                           bool recompute,

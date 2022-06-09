@@ -39,6 +39,8 @@ void launch_attn_softmax_v2(T* vals,
                             float scale,
                             cudaStream_t stream);
 
+template <typename T>
+void launch_attn_softmax(T*, const T*, int, int, int, cudaStream_t);
 // Fused bias add with gelu activation
 template <typename T>
 void launch_bias_gelu(T* input,
@@ -266,6 +268,7 @@ void launch_layer_norm_int8(int8_t* out,
                             int batch_size,
                             int hidden_dim,
                             cudaStream_t stream);
+
 template <typename T>
 void launch_attn_softmax_context(T* out,
                                  T* query,
@@ -273,6 +276,7 @@ void launch_attn_softmax_context(T* out,
                                  float norm_factor,
                                  T* key_merged,
                                  T* merged_value,
+                                 T* attn_bias,
                                  bool merging,
                                  bool triangular,
                                  bool recompute,
