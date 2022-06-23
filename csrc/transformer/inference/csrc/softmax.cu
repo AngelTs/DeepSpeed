@@ -1078,7 +1078,7 @@ __device__ void attn_context(__half2* shared_soft1,
         }
         offset = (offset * head_size);
 
-        int merge_offset = offset;
+        int merge_offset = offset + lane;
         while (wid_iter < value_length) {
             __half2 val_h[2];
             __half* inp_data[2];
