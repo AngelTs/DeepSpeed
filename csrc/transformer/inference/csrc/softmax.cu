@@ -472,8 +472,8 @@ __device__ void attn_score(__half* shared_soft,
             if (attn_bias) {
                 float2 bias_reg = bias_cast[row];
                 __half2* bias_value = reinterpret_cast<__half2*>(&bias_reg);
-                query_value[0] += bias_value[0];
-                query_value[1] += bias_value[1];
+                queries_low[p] = query_value[0] + bias_value[0];
+                queries_high[p] = query_value[1] + bias_value[1];
             } else {
                 queries_low[p] = query_value[0] * norm_factor_h;
                 queries_high[p] = query_value[1] * norm_factor_h;
@@ -1076,7 +1076,7 @@ __device__ void attn_context(__half2* shared_soft1,
             sum[p].x = 0;
             sum[p].y = 0;
         }
-        offset = (offset * head_size) + lane;
+        offset = (offset * head_size);
 
         int merge_offset = offset;
         while (wid_iter < value_length) {
@@ -1091,14 +1091,14 @@ __device__ void attn_context(__half2* shared_soft1,
 
             int row = lane;
             int iter = 0;
-            value_cast += offset;
-            bias_cast += offset;
+            int offset1 = offset + lane;
+
             if (merged_value != nullptr) merged_value_cast += merge_offset;
             while (row < head_size) {
                 __half2 weight_h[4];
 #pragma unroll
                 for (int f = 0; f < 4; f++)
-                    weight_h[f] = (wid_iter + f) < value_length ? value_cast[f * hidden31]
+                    weight_h[f] = (wid_iter + f) < value_length ? value_cast[f * hidden31 + offset1]
                                                                 : __float2half2_rn(0.f);
 
                 if ((col_id % num_seq) == 0 && (merged_value != nullptr)) {
@@ -1108,7 +1108,7 @@ __device__ void attn_context(__half2* shared_soft1,
                             merged_value_cast[f * hidden] = weight_h[f];
                 }
                 if (attn_bias) {
-                    __half2 bias_reg = bias_cast[0];
+                    __half2 bias_reg = bias_cast[offset1 % hidden];
 #pragma unroll
                     for (int f = 0; f < 4; f++) {
                         weight_h[f].x += bias_reg.x;
@@ -1130,16 +1130,12 @@ __device__ void attn_context(__half2* shared_soft1,
                     sum[iter].y += mul[0].y + mul[1].y + mul[2].y + mul[3].y;
                 }
                 row += (WARP_SIZE);
-                value_cast += (WARP_SIZE);
-                bias_cast += WARP_SIZE;
+                offset1 += (WARP_SIZE);
                 if (merged_value != nullptr) merged_value_cast += WARP_SIZE;
                 iter++;
             }
-            value_cast = reinterpret_cast<__half2*>(is_prompt ? prev_value + 2 * (hidden << 1)
-                                                              : merged_value);
             if (merged_value != nullptr)
                 merged_value_cast = reinterpret_cast<__half2*>(merged_value);
-            if (attn_bias) bias_cast = reinterpret_cast<__half2*>(attn_bias + 2 * (hidden << 1));
             wid_iter += 4;
             offset += (hidden31 << 2);
             merge_offset += (hidden << 2);
