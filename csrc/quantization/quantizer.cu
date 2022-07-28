@@ -17,7 +17,7 @@ __global__ void quantize_kernel(__half* vals, int group_size, int num_bits)
 
     float2* vals_cast = reinterpret_cast<float2*>(vals);
 
-    float2 data[MAX_REG];
+    float2 data[MAX_REGISTERS];
 
     int group_id = blockIdx.x;
 
@@ -27,7 +27,7 @@ __global__ void quantize_kernel(__half* vals, int group_size, int num_bits)
         int offset = group_id * group_size;
         float max = -10000.0;
 
-        while (group_index < group_size && reg_count < MAX_REG) {
+        while (group_index < group_size && reg_count < MAX_REGISTERS) {
             data[reg_count] = vals_cast[offset + group_index];
             __half* data_h = reinterpret_cast<__half*>(&data[reg_count]);
 
@@ -105,7 +105,7 @@ __global__ void quantize_kernel(float* vals, int group_size, int num_bits)
 
     float4* vals_cast = reinterpret_cast<float4*>(vals);
 
-    float4 data[MAX_REG];
+    float4 data[MAX_REGISTERS];
 
     int bid = blockIdx.x;
 
@@ -114,7 +114,7 @@ __global__ void quantize_kernel(float* vals, int group_size, int num_bits)
 
     float max = -10000.0;
 
-    while (id < group_size && reg_count < MAX_REG) {
+    while (id < group_size && reg_count < MAX_REGISTERS) {
         float4 data_reg = vals_cast[group_index];
         data[reg_count] = data_reg;
 
@@ -496,7 +496,7 @@ __global__ void quantize_kernel_asym(__half* vals, int group_size, int num_bits)
 
     float2* vals_cast = reinterpret_cast<float2*>(vals);
 
-    float2 data[MAX_REG];
+    float2 data[MAX_REGISTERS];
 
     int group_id = blockIdx.x;
 
@@ -507,7 +507,7 @@ __global__ void quantize_kernel_asym(__half* vals, int group_size, int num_bits)
         float max = -10000.0;
         float min = 10000.0;
 
-        while (group_index < group_size && reg_count < MAX_REG) {
+        while (group_index < group_size && reg_count < MAX_REGISTERS) {
             data[reg_count] = vals_cast[offset + group_index];
             __half* data_h = reinterpret_cast<__half*>(&data[reg_count]);
 
@@ -607,7 +607,7 @@ __global__ void quantize_kernel_asym(float* vals, int group_size, int num_bits)
 
     float4* vals_cast = reinterpret_cast<float4*>(vals);
 
-    float4 data[MAX_REG];
+    float4 data[MAX_REGISTERS];
 
     int bid = blockIdx.x;
 
@@ -617,7 +617,7 @@ __global__ void quantize_kernel_asym(float* vals, int group_size, int num_bits)
     float max = -10000.0;
     float min = 10000.0;
 
-    while (id < group_size && reg_count < MAX_REG) {
+    while (id < group_size && reg_count < MAX_REGISTERS) {
         float4 data_reg = vals_cast[group_index];
         data[reg_count] = data_reg;
 

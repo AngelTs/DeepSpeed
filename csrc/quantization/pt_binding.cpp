@@ -2,6 +2,7 @@
 #include <torch/extension.h>
 #include <vector>
 #include "custom_cuda_layers.h"
+#include "curand.h"
 
 template <typename T>
 at::Tensor ds_quantize(at::Tensor& vals, int groups, int bits)
@@ -10,7 +11,7 @@ at::Tensor ds_quantize(at::Tensor& vals, int groups, int bits)
     int size = 1;
     for (auto dim : t_size) size *= dim;
 
-    if ((((size / groups) - 1) / 4096 + 1) <= MAX_REG) {
+    if ((((size / groups) - 1) / 4096 + 1) <= MAX_REGISTERS) {
         launch_quantize_kernel(
             (T*)vals.data_ptr(), size, groups, bits, at::cuda::getCurrentCUDAStream());
     }
@@ -38,7 +39,7 @@ at::Tensor ds_quantize_asym(at::Tensor& vals, int groups, int bits)
     int size = 1;
     for (auto dim : t_size) size *= dim;
 
-    if ((((size / groups) - 1) / 4096 + 1) <= MAX_REG) {
+    if ((((size / groups) - 1) / 4096 + 1) <= MAX_REGISTERS) {
         launch_quantize_kernel_asym(
             (T*)vals.data_ptr(), size, groups, bits, at::cuda::getCurrentCUDAStream());
     }
