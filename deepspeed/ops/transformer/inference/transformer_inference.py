@@ -201,7 +201,8 @@ class DeepSpeedSelfAttentionFunction(Function):
                                    config.epsilon,
                                    (attn_qkvb is not None),
                                    DeepSpeedTransformerInference.layer_id,
-                                   config.enable_qkv_quantization)
+                                   True)
+                #config.enable_qkv_quantization)
 
             context_layer, key_layer, value_layer = compute_attention(qkv_out[0] if isinstance(qkv_out, list) else qkv_out, input_mask)
 
