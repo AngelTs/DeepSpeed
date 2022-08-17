@@ -575,11 +575,11 @@ __device__ void quantize_kernel_glue(float2* data,
     }
     max = g.shfl(max, 0);
 
-    float q_scale = (1 << num_bits) / (2 * (float)max + 1e-5);
+    float q_scale = (1 << num_bits) / (2 * (float)max);
 
     group_index = threadIdx.x + bid * group_size;
     for (int i = 0; i < cnt; i++) {
-        float q_data_int;
+        float q_data_int;  // = (float)(int)(1 << 8 | 1 << 16 | 1 << 24 | 1);
         int8_t* q_data_8 = reinterpret_cast<int8_t*>(&q_data_int);
         __half* data_h = reinterpret_cast<__half*>(&data[i]);
         int32_t data_f[4];
@@ -591,10 +591,6 @@ __device__ void quantize_kernel_glue(float2* data,
         q_data_8[1] = data_f[1] > 127 ? 127 : (data_f[1] < -128 ? -128 : data_f[1]);
         q_data_8[2] = data_f[2] > 127 ? 127 : (data_f[2] < -128 ? -128 : data_f[2]);
         q_data_8[3] = data_f[3] > 127 ? 127 : (data_f[3] < -128 ? -128 : data_f[3]);
-        // q_data_8[0] = !(data_f[0] & 0x80000000) && (data_f[0] & 0x00000080) ? 127 : data_f[0];
-        // q_data_8[1] = !(data_f[1] & 0x80000000) && (data_f[1] & 0x00000080) ? 127 : data_f[1];
-        // q_data_8[2] = !(data_f[2] & 0x80000000) && (data_f[2] & 0x00000080) ? 127 : data_f[2];
-        // q_data_8[3] = !(data_f[3] & 0x80000000) && (data_f[3] & 0x00000080) ? 127 : data_f[3];
         vals_int_cast[group_index] = q_data_int;
         group_index += (blockDim.x);
     }

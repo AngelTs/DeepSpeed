@@ -34,18 +34,17 @@ class GroupQuantizer:
 
     def quantize(self, inputs, qkv=True, count=1):
         if not self.q_int8 or not qkv:
+            inputs = torch.nn.Parameter(inputs, requires_grad=False)
             inputs.scale = torch.empty(1)
             return inputs
         q_range = 2**self.num_bits
-        #self.num_groups = inputs.shape[1] // (self.group_size * count)
         inputs = inputs.to(torch.cuda.current_device())
-        input_flat = inputs.t().contiguous().reshape(self.num_groups, -1).contiguous()
+        input_flat = inputs.reshape(self.num_groups, -1).contiguous()
         input_min = torch.min(input_flat, dim=1, keepdim=True)[0].float()
         input_max = torch.max(input_flat, dim=1, keepdim=True)[0].float()
-        scale = torch.max(input_min.abs(), input_max.abs()) * 2.0 / (q_range - 2)
-        input_flat = (input_flat / scale).round().clamp(-q_range // 2 + 1,
-                                                        q_range // 2 - 1)
-        inputs_q = input_flat.reshape(inputs.t().shape).to(torch.int8).contiguous()
+        scale = torch.max(input_min.abs(), input_max.abs()) * 2.0 / (q_range)
+        input_flat = (input_flat / scale).round().clamp(-q_range // 2, q_range // 2 - 1)
+        inputs_q = input_flat.reshape(inputs.shape).to(torch.int8).contiguous()
         out = torch.nn.Parameter(inputs_q, requires_grad=False)
         out.scale = scale
         return out
@@ -396,9 +395,12 @@ def replace_transformer_layer(orig_layer_impl,
                 return data
 
             if attn_linear_layer:
+                if not quantize:
+                    qkvw.data = transpose(qkvw.data)
+                    dense_w.data = transpose(dense_w.data)
+            elif quantize:
                 qkvw.data = transpose(qkvw.data)
                 dense_w.data = transpose(dense_w.data)
-
             if megatron_v2:
                 new_module.config.rotate_half = True
                 new_module.config.rotate_every_two = False
@@ -437,6 +439,12 @@ def replace_transformer_layer(orig_layer_impl,
                 transformer_config.training_mp_size / transformer_config.mp_size)
 
             if mlp_linear_layer:
+                if not quantize:
+                    _h4h_w = [transpose(moe_w1.data)
+                              for moe_w1 in _h4h_w] if moe else transpose(_h4h_w.data)
+                    _4hh_w = [transpose(moe_w1.data)
+                              for moe_w1 in _4hh_w] if moe else transpose(_4hh_w.data)
+            elif quantize:
                 _h4h_w = [transpose(moe_w1.data)
                           for moe_w1 in _h4h_w] if moe else transpose(_h4h_w.data)
                 _4hh_w = [transpose(moe_w1.data)
@@ -448,15 +456,10 @@ def replace_transformer_layer(orig_layer_impl,
                 _res_coef.data = transpose(_res_coef.data)
 
             attn_block = new_module.attention
-            attn_block.attn_qkvw = quantizer.quantize(mp_replace.qkv_copy(
-                attn_block.attn_qkvw,
-                qkvw),
-                                                      qkv=enable_qkv_quantization)
+            attn_block.attn_qkvw = quantizer.quantize(qkvw)
             attn_block.attn_qkvb = mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
-            attn_block.attn_ow = quantizer.quantize(
-                mp_replace.copy(attn_block.attn_ow,
-                                dense_w))
+            attn_block.attn_ow = quantizer.quantize(dense_w)
             attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
 
             mpl_block = new_module.mlp
@@ -489,13 +492,9 @@ def replace_transformer_layer(orig_layer_impl,
                         torch.cuda.current_device())
                     new_module.res_coef.data = _res_coef.to(torch.cuda.current_device())
             else:
-                mpl_block.inter_w = quantizer.quantize(
-                    mp_replace.copy(mpl_block.inter_w,
-                                    _h4h_w))
+                mpl_block.inter_w = quantizer.quantize(_h4h_w)
                 mpl_block.inter_b.data = mp_replace.copy(mpl_block.inter_b, _h4h_b)
-                mpl_block.output_w = quantizer.quantize(
-                    mp_replace.copy(mpl_block.output_w,
-                                    _4hh_w))
+                mpl_block.output_w = quantizer.quantize(_4hh_w)
                 mpl_block.output_b.data = mp_replace.copy(mpl_block.output_b, _4hh_b)
                 if attn_nw is None:
                     new_module.mlp.attn_nw = attn_nw

@@ -558,7 +558,6 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
     ds_layernorm_internal<T>(workspace, input, gamma, beta, epsilon);
     if (q_int8) {
         int out_size = weight.size(0);
-
         int bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
                        : (bsz % 128 == 0)
@@ -572,14 +571,12 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
                                    : bsz + (128 - (bsz % 128));
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
-
         launch_me((int8_t*)aux_buff,
                   (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                   (__half*)workspace,
                   input.size(2),
                   bsz,
                   Context::Instance().GetCurrentStream());
-
         run_gemm(aux_buff,
                  weight.data_ptr(),
                  output.data_ptr(),
@@ -648,7 +645,7 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
                                     bool q_int8)
 {
     int bsz = input.size(0) * input.size(1);
-    int out_size = weight.size(1);
+    int out_size = q_int8 ? weight.size(0) : weight.size(1);
     T* workspace = (T*)Context::Instance().GetWorkSpace();
     if (!workspace) {
         cublasSetStream(Context::Instance().GetCublasHandle(),
@@ -1604,6 +1601,8 @@ void TransformerEncoder(at::Tensor& input,
                         : bsz_seq + (128 - (bsz_seq % 128));
     auto aux_buff =
         (T*)Context::Instance().GetWorkSpace() + 8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
+    auto aux_buff1 =
+        (T*)Context::Instance().GetWorkSpace() + 12 * input.size(0) * MAX_OUT_TOKES * input.size(2);
 
     T* input_ptr = (T*)input.data_ptr();
     float alpha = (T)1.0;
@@ -1618,7 +1617,7 @@ void TransformerEncoder(at::Tensor& input,
                           bsz_seq,
                           hidden_dim,
                           new_stream);
-    if (enable_qkv_quantization) {
+    if (q_int8) {
         int out_size = attn_weights[0].size(0);
         launch_me((int8_t*)aux_buff,
                   (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
@@ -1737,7 +1736,7 @@ void TransformerEncoder(at::Tensor& input,
                   (__half*)buf_2,
                   input.size(2),
                   bsz_seq,
-                  Context::Instance().GetCurrentStream());
+                  new_stream);
         run_gemm(aux_buff,
                  attn_weights[1].data_ptr(),
                  buf_1,
@@ -1748,7 +1747,7 @@ void TransformerEncoder(at::Tensor& input,
                  input.size(2),
                  bsz1,
                  q_scale2.size(0),
-                 Context::Instance().GetCurrentStream());
+                 new_stream);
     } else {
         cublas_gemm_ex(cub_handle,
                        CUBLAS_OP_N,
@@ -1781,11 +1780,11 @@ void TransformerEncoder(at::Tensor& input,
                   (__half*)buf_4,
                   input.size(2),
                   bsz_seq,
-                  Context::Instance().GetCurrentStream());
+                  new_stream);
 
         run_gemm(aux_buff,
                  mlp_weights[0].data_ptr(),
-                 buf_0,
+                 aux_buff1,
                  (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                  q_scale1.data_ptr(),
                  bsz1,
@@ -1793,10 +1792,10 @@ void TransformerEncoder(at::Tensor& input,
                  input.size(2),
                  bsz1,
                  q_scale1.size(0),
-                 Context::Instance().GetCurrentStream());
+                 new_stream);
         launch_bias_gelu_int8((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * out_size),
-                              (__half*)buf_0,
+                              (__half*)aux_buff1,
                               (__half*)mlp_biases[0].data_ptr(),
                               out_size,
                               bsz_seq,
@@ -1811,7 +1810,7 @@ void TransformerEncoder(at::Tensor& input,
                  out_size,
                  bsz1,
                  q_scale.size(0),
-                 Context::Instance().GetCurrentStream());
+                 new_stream);
     } else {
         cublas_gemm_ex(cub_handle,
                        CUBLAS_OP_N,
@@ -1862,6 +1861,143 @@ void TransformerEncoder(at::Tensor& input,
                               hidden_dim,
                               preln,
                               new_stream);
+}
+at::Tensor int8_matmul(at::Tensor& a, at::Tensor& b, at::Tensor& ascale, at::Tensor& bscale)
+{
+    unsigned bsz = a.size(0);
+    unsigned _seq_length = a.size(1);
+    int bsz_seq = bsz * _seq_length;
+    int bsz1 =
+        (bsz_seq >= 32 && bsz_seq < 128)
+            ? 128
+            : (bsz_seq % 128 == 0)
+                  ? bsz_seq
+                  : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
+                        ? ((bsz_seq % 64 == 0)
+                               ? bsz_seq
+                               : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
+                                     ? ((bsz_seq % 32 == 0) ? bsz_seq
+                                                            : bsz_seq + (32 - (bsz_seq % 32)))
+                                     : bsz_seq + (64 - (bsz_seq % 64)))
+                        : bsz_seq + (128 - (bsz_seq % 128));
+
+    auto options = at::TensorOptions()
+                       .dtype(at::kHalf)
+                       .layout(at::kStrided)
+                       .device(at::kCUDA)
+                       .requires_grad(false);
+    auto c = at::empty({1, bsz1, b.size(0)}, options);
+    run_gemm(a.data_ptr(),
+             b.data_ptr(),
+             c.data_ptr(),
+             ascale.data_ptr(),
+             bscale.data_ptr(),
+             bsz1,
+             b.size(0),
+             a.size(2),
+             bsz1,
+             bscale.size(0),
+             Context::Instance().GetCurrentStream());
+    return torch::narrow(c, 1, 0, bsz_seq);
+}
+
+std::vector<at::Tensor> int8_quantize(at::Tensor& a)
+{
+    unsigned bsz = a.size(0);
+    unsigned _seq_length = a.size(1);
+    int bsz_seq = bsz * _seq_length;
+    int bsz1 = 128;
+    //(bsz_seq >= 32 && bsz_seq < 128)
+    //    ? 128
+    //    : (bsz_seq % 128 == 0)
+    //          ? bsz_seq
+    //          : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
+    //                ? ((bsz_seq % 64 == 0)
+    //                       ? bsz_seq
+    //                       : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
+    //                             ? ((bsz_seq % 32 == 0) ? bsz_seq
+    //                                                    : bsz_seq + (32 - (bsz_seq % 32)))
+    //                             : bsz_seq + (64 - (bsz_seq % 64)))
+    //                : bsz_seq + (128 - (bsz_seq % 128));
+
+    auto options = at::TensorOptions()
+                       .dtype(torch::kInt8)
+                       .layout(at::kStrided)
+                       .device(at::kCUDA)
+                       .requires_grad(false);
+    auto options1 = at::TensorOptions()
+                        .dtype(at::kFloat)
+                        .layout(at::kStrided)
+                        .device(at::kCUDA)
+                        .requires_grad(false);
+    auto c = at::empty({1, bsz1, a.size(2)}, options);
+    auto scale = at::empty({bsz1, 1}, options1);
+
+    launch_me((int8_t*)c.data_ptr(),
+              (float*)scale.data_ptr(),
+              (__half*)a.data_ptr(),
+              a.size(2),
+              bsz_seq,
+              Context::Instance().GetCurrentStream());
+    return {c, scale};
+}
+
+at::Tensor int8_matmul1(at::Tensor& a, at::Tensor& b, at::Tensor& bscale)
+{
+    unsigned bsz = a.size(0);
+    unsigned _seq_length = a.size(1);
+    int bsz_seq = bsz * _seq_length;
+    int bsz1 =
+        (bsz_seq >= 32 && bsz_seq < 128)
+            ? 128
+            : (bsz_seq % 128 == 0)
+                  ? bsz_seq
+                  : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
+                        ? ((bsz_seq % 64 == 0)
+                               ? bsz_seq
+                               : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
+                                     ? ((bsz_seq % 32 == 0) ? bsz_seq
+                                                            : bsz_seq + (32 - (bsz_seq % 32)))
+                                     : bsz_seq + (64 - (bsz_seq % 64)))
+                        : bsz_seq + (128 - (bsz_seq % 128));
+
+    auto options12 = at::TensorOptions()
+                         .dtype(torch::kInt8)
+                         .layout(at::kStrided)
+                         .device(at::kCUDA)
+                         .requires_grad(false);
+    auto options1 = at::TensorOptions()
+                        .dtype(at::kFloat)
+                        .layout(at::kStrided)
+                        .device(at::kCUDA)
+                        .requires_grad(false);
+    auto cc = at::empty({1, bsz1, a.size(2)}, options12);
+    auto scale = at::empty({bsz1, 1}, options1);
+
+    launch_me((int8_t*)cc.data_ptr(),
+              (float*)scale.data_ptr(),
+              (__half*)a.data_ptr(),
+              a.size(2),
+              bsz_seq,
+              Context::Instance().GetCurrentStream());
+    auto options = at::TensorOptions()
+                       .dtype(at::kHalf)
+                       .layout(at::kStrided)
+                       .device(at::kCUDA)
+                       .requires_grad(false);
+    auto c = at::empty({1, bsz1, b.size(0)}, options);
+    run_gemm(cc.data_ptr(),
+             b.data_ptr(),
+             c.data_ptr(),
+             scale.data_ptr(),
+             bscale.data_ptr(),
+             bsz1,
+             b.size(0),
+             a.size(2),
+             bsz1,
+             bscale.size(0),
+             Context::Instance().GetCurrentStream());
+    return torch::narrow(c, 1, 0, bsz_seq);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
@@ -1917,4 +2053,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("encoder_fp16",
           &TransformerEncoder<__half>,
           "DeepSpeed transformerEncoder with fp16 (CUDA)");
+    m.def("int8_matmul", &int8_matmul, "DeepSpeed vector-MM with fp16 (CUDA)");
+    m.def("int8_matmul1", &int8_matmul1, "DeepSpeed vector-MM with fp16 (CUDA)");
+    m.def("int8_quantize", &int8_quantize, "DeepSpeed vector-MM with fp16 (CUDA)");
 }
