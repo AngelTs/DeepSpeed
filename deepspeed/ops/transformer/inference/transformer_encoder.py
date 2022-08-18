@@ -44,7 +44,8 @@ class DeepSpeedEncoderFunction(Function):
              config.pre_layer_norm,
              config.epsilon,
              norm_factor,
-             config.q_int8,
+             config.q_int,
+            #  config.bits,
              mlp_weights[1].scale,
              mlp_weights[0].scale,
              attn_weights[1].scale,
@@ -84,6 +85,8 @@ class DeepSpeedEncoder(nn.Module):
                  mp_group=None,
                  quantize_scales=None,
                  quantize_groups=1,
+                 quantize=False,
+                 quantize_bits=8,
                  merge_count=1,
                  mlp_extra_grouping=False,
                  qkv_merging=False):
@@ -98,24 +101,26 @@ class DeepSpeedEncoder(nn.Module):
             builder = op_builder.InferenceBuilder()
             inference_cuda_module = builder.load()
 
-        print("DeepSpeed ENCODER config is ", self.config.__dict__)
+        # print("DeepSpeed ENCODER config is ", self.config.__dict__)
 
         self.attention = DeepSpeedSelfAttention(self.config,
                                                 mp_group,
                                                 quantize_scales,
                                                 quantize_groups,
+                                                quantize_bits,
                                                 merge_count,
                                                 qkv_merging)
         self.mlp = DeepSpeedMLP(self.config,
                                 mp_group,
                                 quantize_scales,
                                 quantize_groups,
+                                quantize_bits,
                                 merge_count,
                                 mlp_extra_grouping)
 
         self.norm_w = nn.Parameter(torch.Tensor(self.config.hidden_size))
         self.norm_b = nn.Parameter(torch.Tensor(self.config.hidden_size))
-        self.encoder_func = inference_cuda_module.encoder_fp16 if config.fp16 or config.q_int8 else \
+        self.encoder_func = inference_cuda_module.encoder_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.encoder_fp32
         self.attention.norm_factor = (1 / self.attention.norm_factor)**2
 

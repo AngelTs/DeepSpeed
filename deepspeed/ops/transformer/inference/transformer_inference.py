@@ -58,7 +58,8 @@ class DeepSpeedInferenceConfig(TransformerConfig):
                  local_rank=-1,
                  mp_size=1,
                  fp16=False,
-                 q_int8=False,
+                 q_int=False,
+                 q_bits=8,
                  pre_layer_norm=True,
                  stochastic_mode=False,
                  scale_attention=True,
@@ -84,7 +85,8 @@ class DeepSpeedInferenceConfig(TransformerConfig):
         self.stochastic_mode = stochastic_mode
         self.epsilon = layer_norm_eps
         self.mp_size = mp_size
-        self.q_int8 = q_int8
+        self.q_int = q_int
+        self.q_bits = q_bits
         self.scale_attention = scale_attention
         self.triangular_masking = triangular_masking
         self.local_attention = local_attention
@@ -136,6 +138,7 @@ class DeepSpeedSelfAttentionFunction(Function):
                 mp_group,
                 q_scales,
                 q_groups,
+                q_bits,
                 merge_count,
                 qkv_merging,
                 score_context_func,
@@ -210,7 +213,7 @@ class DeepSpeedSelfAttentionFunction(Function):
                                         attn_ow,
                                         False,
                                         attn_ow.scale,
-                                        config.q_int8)
+                                        config.q_int)
 
             return output, key_layer, value_layer, context_layer, qkv_out[-1] # attn_out, present_key, present_value, context_output, inp_norm
 
@@ -235,6 +238,7 @@ class DeepSpeedSelfAttention(nn.Module):
                  mp_group=None,
                  q_scales=None,
                  q_groups=1,
+                 q_bits=8,
                  merge_count=1,
                  qkv_merging=False):
         super(DeepSpeedSelfAttention, self).__init__()
@@ -267,16 +271,17 @@ class DeepSpeedSelfAttention(nn.Module):
         # used for quantization
         self.q_scales = q_scales
         self.q_groups = q_groups
+        self.q_bits = q_bits
         self.merge_count = int(math.log2(merge_count))
 
         self.norm_factor = math.sqrt(
             math.sqrt(self.config.hidden_size // self.config.heads))
         self.qkv_merging = qkv_merging
-        self.score_context_func = inference_cuda_module.softmax_context_fp16 if (config.fp16 or config.q_int8) else \
+        self.score_context_func = inference_cuda_module.softmax_context_fp16 if (config.fp16 or config.q_int) else \
                                     inference_cuda_module.softmax_context_fp32
-        self.qkv_func = inference_cuda_module.qkv_gemm_fp16 if config.fp16 or config.q_int8 else \
+        self.qkv_func = inference_cuda_module.qkv_gemm_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.qkv_gemm_fp32
-        self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int8 else \
+        self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.vector_matmul_fp32
         self.linear_func = inference_cuda_module.linear_layer_fp16 if config.fp16 else \
                                     inference_cuda_module.linear_layer_fp32
@@ -314,6 +319,7 @@ class DeepSpeedSelfAttention(nn.Module):
             self.mp_group,
             self.q_scales,
             self.q_groups,
+            self.q_bits,
             self.merge_count,
             self.qkv_merging,
             self.score_context_func,
@@ -341,6 +347,7 @@ class DeepSpeedMLPFunction(Function):
                 output_w,
                 q_scales,
                 q_groups,
+                q_bits,
                 merge_count,
                 mlp_gemm_func,
                 fused_gemm_gelu,
@@ -357,7 +364,7 @@ class DeepSpeedMLPFunction(Function):
                                      False,
                                      output_w.scale,
                                      inter_w.scale,
-                                     config.q_int8)
+                                     config.q_int)
         else:
             output = mlp_gemm_func(input,
                                    residual,
@@ -372,7 +379,7 @@ class DeepSpeedMLPFunction(Function):
                                    config.mlp_after_attn,
                                    output_w.scale,
                                    inter_w.scale,
-                                   config.q_int8)
+                                   config.q_int)
         inference_cuda_module.residual_add(output,
                                            residual,
                                            input,
@@ -397,6 +404,7 @@ class DeepSpeedMLP(nn.Module):
                  mp_group=None,
                  q_scales=None,
                  q_groups=1,
+                 q_bits=8,
                  merge_count=1,
                  mlp_extra_grouping=False):
         super(DeepSpeedMLP, self).__init__()
@@ -417,6 +425,7 @@ class DeepSpeedMLP(nn.Module):
         # used for quantization
         self.q_scales = q_scales
         self.q_groups = q_groups * 2 if mlp_extra_grouping else q_groups
+        self.q_bits = q_bits
         self.merge_count = int(math.log2(merge_count))
 
         self.mp_group = mp_group
@@ -425,14 +434,14 @@ class DeepSpeedMLP(nn.Module):
             builder = op_builder.InferenceBuilder()
             inference_cuda_module = builder.load()
 
-        self.mlp_gemm_func = inference_cuda_module.mlp_gemm_fp16 if config.fp16 or config.q_int8 else \
+        self.mlp_gemm_func = inference_cuda_module.mlp_gemm_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.mlp_gemm_fp32
-        self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int8 else \
+        self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int else \
                                 inference_cuda_module.vector_matmul_fp32
-        self.fused_gemm_gelu = inference_cuda_module.fused_gemm_gelu_fp16 if config.fp16 or config.q_int8 else \
+        self.fused_gemm_gelu = inference_cuda_module.fused_gemm_gelu_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.fused_gemm_gelu_fp32
 
-        self.bias_residual_func = inference_cuda_module.bias_residual_fp16 if config.fp16 or config.q_int8 else \
+        self.bias_residual_func = inference_cuda_module.bias_residual_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.bias_residual_fp32
 
     def forward(self, input, residual, residual_norm, bias):
@@ -450,6 +459,7 @@ class DeepSpeedMLP(nn.Module):
                                           self.output_w,
                                           self.q_scales,
                                           self.q_groups,
+                                          self.q_bits,
                                           self.merge_count,
                                           self.mlp_gemm_func,
                                           self.fused_gemm_gelu,
@@ -538,7 +548,7 @@ class DeepSpeedTransformerInference(nn.Module):
             input = input[0]
         input_type = input.dtype
 
-        if (self.config.fp16 or self.config.q_int8) \
+        if (self.config.fp16 or self.config.q_int) \
             and input.dtype == torch.float:
             input = input.half()
         #torch.cuda.synchronize()
@@ -561,7 +571,7 @@ class DeepSpeedTransformerInference(nn.Module):
             output = self.mlp(attention_output, input, inp_norm, self.attention.attn_ob)
 
             if not self.config.pre_layer_norm:
-                ds_layernorm = inference_cuda_module.layer_norm_fp16 if self.config.fp16 or self.config.q_int8 else \
+                ds_layernorm = inference_cuda_module.layer_norm_fp16 if self.config.fp16 or self.config.q_int else \
                                         inference_cuda_module.layer_norm_fp32
                 output = ds_layernorm(output,
                                       self.norm_w,

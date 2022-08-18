@@ -548,7 +548,7 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
                               at::Tensor& beta,
                               const float epsilon,
                               bool add_bias,
-                              bool q_int8)
+                              bool q_int)
 {
     float alpha = (T)1.0;
     float gemm_beta = (T)0.0;
@@ -556,7 +556,7 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
     T* workspace = (T*)Context::Instance().GetWorkSpace();
     workspace += (3 * input.size(0) * MAX_OUT_TOKES * input.size(2));
     ds_layernorm_internal<T>(workspace, input, gamma, beta, epsilon);
-    if (q_int8) {
+    if (q_int) {
         int out_size = weight.size(0);
         int bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
@@ -642,10 +642,10 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
                                     const float epsilon,
                                     bool add_bias,
                                     unsigned num_layers,
-                                    bool q_int8)
+                                    bool q_int)
 {
     int bsz = input.size(0) * input.size(1);
-    int out_size = q_int8 ? weight.size(0) : weight.size(1);
+    int out_size = q_int ? weight.size(0) : weight.size(1);
     T* workspace = (T*)Context::Instance().GetWorkSpace();
     if (!workspace) {
         cublasSetStream(Context::Instance().GetCublasHandle(),
@@ -663,7 +663,7 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
         torch::from_blob(workspace, {input.size(0), input.size(1), out_size}, input.options());
 
     auto inp_norm = qkv_unfused_cublas<T>(
-        output, input, weight, q_scale, bias, gamma, beta, epsilon, add_bias, q_int8);
+        output, input, weight, q_scale, bias, gamma, beta, epsilon, add_bias, q_int);
 
     return {output, inp_norm};
 }
@@ -754,7 +754,7 @@ at::Tensor ds_linear_layer(at::Tensor& input,
                            at::Tensor& weight,
                            at::Tensor& q_scale,
                            at::Tensor& bias,
-                           bool q_int8)
+                           bool q_int)
 {
     auto options = at::TensorOptions()
                        .dtype(input.options().dtype())
@@ -764,7 +764,7 @@ at::Tensor ds_linear_layer(at::Tensor& input,
 
     auto output = at::empty({input.size(0), input.size(1), weight.size(1)}, options);
     int bsz = input.size(0) * input.size(1);
-    if (q_int8) {
+    if (q_int) {
         int out_size = weight.size(0);
 
         int bsz1 = (bsz >= 32 && bsz < 128)
@@ -868,7 +868,7 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
                             at::Tensor& weight,
                             bool async_op,
                             at::Tensor& q_scale,
-                            bool q_int8)
+                            bool q_int)
 {
     auto options = at::TensorOptions()
                        .dtype(input.options().dtype())
@@ -880,7 +880,7 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
     auto output =
         torch::from_blob(workspace, {input.size(0), input.size(1), weight.size(1)}, options);
     int bsz = input.size(0) * input.size(1);
-    if (q_int8) {
+    if (q_int) {
         int out_size = weight.size(0);
 
         int bsz1 = (bsz >= 32 && bsz < 128)
@@ -989,7 +989,7 @@ void mlp_unfused_cublas(T* output,
                         bool mlp_after_attn,
                         at::Tensor& q_scale,
                         at::Tensor& q_scale1,
-                        bool q_int8)
+                        bool q_int)
 {
     int bsz = input.size(0) * input.size(1);
     T* workspace = (T*)Context::Instance().GetWorkSpace() + 4 * at::numel(input);
@@ -1007,7 +1007,7 @@ void mlp_unfused_cublas(T* output,
                                preLayerNorm,
                                mlp_after_attn,
                                Context::Instance().GetCurrentStream());
-    if (q_int8) {
+    if (q_int) {
         int out_size = weight.size(0);
         int bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
@@ -1162,7 +1162,7 @@ at::Tensor ds_mlp_gemm(at::Tensor& input,
                        bool mlp_after_attn,
                        at::Tensor& q_scale,
                        at::Tensor& q_scale1,
-                       bool q_int8)
+                       bool q_int)
 {
     int out_size = weight1.size(0);
     auto options = at::TensorOptions()
@@ -1192,7 +1192,7 @@ at::Tensor ds_mlp_gemm(at::Tensor& input,
                           mlp_after_attn,
                           q_scale,
                           q_scale1,
-                          q_int8);
+                          q_int);
     return output;
 }
 
@@ -1256,7 +1256,7 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
                            bool async_op,
                            at::Tensor& q_scale,
                            at::Tensor& q_scale1,
-                           bool q_int8)
+                           bool q_int)
 {
     auto options = at::TensorOptions()
                        .dtype(input.options().dtype())
@@ -1270,7 +1270,7 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
                                    {input.size(0), input.size(1), weight_out.size(0)},
                                    options);
     int bsz = input.size(0) * input.size(1);
-    if (q_int8) {
+    if (q_int) {
         int out_size = weight.size(0);
         int bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
@@ -1554,7 +1554,7 @@ void TransformerEncoder(at::Tensor& input,
                         bool preln,
                         float epsilon,
                         float norm_factor,
-                        bool q_int8,
+                        bool q_int,
                         at::Tensor& q_scale,
                         at::Tensor& q_scale1,
                         at::Tensor& q_scale2,
@@ -1617,7 +1617,7 @@ void TransformerEncoder(at::Tensor& input,
                           bsz_seq,
                           hidden_dim,
                           new_stream);
-    if (q_int8) {
+    if (q_int) {
         int out_size = attn_weights[0].size(0);
         launch_me((int8_t*)aux_buff,
                   (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
@@ -1729,7 +1729,7 @@ void TransformerEncoder(at::Tensor& input,
     }
     launch_transform4d_0213<T>(
         buf_2, buf_0, bsz, num_heads, _seq_length, hidden_dim, new_stream, 1);
-    if (q_int8) {
+    if (q_int) {
         int out_size = attn_weights[1].size(0);
         launch_me((int8_t*)aux_buff,
                   (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
@@ -1772,7 +1772,7 @@ void TransformerEncoder(at::Tensor& input,
                                    bsz_seq,
                                    hidden_dim,
                                    new_stream);
-    if (q_int8) {
+    if (q_int) {
         int out_size = mlp_weights[0].size(0);
 
         launch_me((int8_t*)aux_buff,

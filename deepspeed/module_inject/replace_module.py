@@ -26,14 +26,14 @@ class LinearAllreduce(nn.Module):
 
 
 class GroupQuantizer:
-    def __init__(self, q_int8=True, num_groups=32, group_size=32, num_bits=8):
+    def __init__(self, q_int=True, num_groups=32, group_size=32, num_bits=8):
         self.num_groups = num_groups
         self.group_size = group_size
         self.num_bits = num_bits
-        self.q_int8 = q_int8
+        self.q_int = q_int
 
     def quantize(self, inputs, qkv=True, count=1):
-        if not self.q_int8 or not qkv:
+        if not self.q_int or not qkv:
             inputs = torch.nn.Parameter(inputs, requires_grad=False)
             inputs.scale = torch.empty(1)
             return inputs
@@ -164,6 +164,7 @@ def replace_transformer_layer(orig_layer_impl,
                               stochastic_mode=True,
                               training=True,
                               quantize=False,
+                              quantize_bits=8,
                               quantize_settings=None,
                               triangular_masking=False,
                               return_tuple=True,
@@ -269,7 +270,7 @@ def replace_transformer_layer(orig_layer_impl,
             _res_coef = _res_coef.half()
 
         mp_replace = ReplaceWithTensorSlicing(mp_group=mp_group)
-        quantizer = GroupQuantizer(q_int8=quantize)
+        quantizer = GroupQuantizer(q_int=quantize, num_bits=quantize_bits)
         #expert_mp_replace = ReplaceWithTensorSlicing(mp_group=expert_mp_group)
 
         if inference:
@@ -286,7 +287,7 @@ def replace_transformer_layer(orig_layer_impl,
                     fp16=fp16,
                     pre_layer_norm=preln,
                     mp_size=mp_size,
-                    q_int8=quantize,
+                    q_int=quantize,
                     moe_experts=local_ep_size,
                     global_experts=num_experts,
                     mlp_type=moe_type)
@@ -307,7 +308,7 @@ def replace_transformer_layer(orig_layer_impl,
                     fp16=fp16,
                     pre_layer_norm=preln,
                     mp_size=mp_size,
-                    q_int8=quantize,
+                    q_int=quantize,
                     return_tuple=(return_tuple or (policy_cls is HFBertLayerPolicy)),
                     triangular_masking=(policy_cls is not HFBertLayerPolicy
                                         and policy_cls is not HFDistilBertLayerPolicy),
@@ -343,7 +344,7 @@ def replace_transformer_layer(orig_layer_impl,
                     if (policy_cls is HFBertLayerPolicy
                             or policy_cls is HFDistilBertLayerPolicy):
                         new_module = transformer_inference.DeepSpeedEncoder(
-                            transformer_config)
+                            transformer_config, quantize=True, quantize_bits=quantize_bits,)
                     else:
                         new_module = transformer_inference.DeepSpeedTransformerInference(
                             transformer_config,

@@ -55,7 +55,7 @@ class DeepSpeedMoEInferenceConfig(DeepSpeedInferenceConfig):
                  local_rank=-1,
                  mp_size=1,
                  fp16=False,
-                 q_int8=False,
+                 q_int=False,
                  pre_layer_norm=True,
                  stochastic_mode=False,
                  scale_attention=True,
@@ -83,7 +83,7 @@ class DeepSpeedMoEInferenceConfig(DeepSpeedInferenceConfig):
                   local_rank,
                   mp_size,
                   fp16,
-                  q_int8,
+                  q_int,
                   pre_layer_norm,
                   stochastic_mode,
                   scale_attention,
@@ -130,7 +130,7 @@ class DeepSpeedMLPFunction(Function):
                 merge_count,
                 mp_group,
                 async_op):
-        if config.q_int8:
+        if config.q_int:
             intermediate = inference_cuda_module.fused_gemm_gelu_int8(
                 input,
                 inter_w,
@@ -275,7 +275,7 @@ class DeepSpeedMoEInference(nn.Module):
                                            mlp_extra_grouping,
                                            mp_group)
             self.res_coef = nn.Parameter(torch.Tensor(self.config.hidden_size, 2))
-            self.coef_func = inference_cuda_module.softmax_fp16 if self.config.fp16 or self.config.q_int8 else \
+            self.coef_func = inference_cuda_module.softmax_fp16 if self.config.fp16 or self.config.q_int else \
                                         inference_cuda_module.softmax_fp32
             self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 else \
                                     inference_cuda_module.vector_matmul_fp32
@@ -305,11 +305,11 @@ class DeepSpeedMoEInference(nn.Module):
 
         print("DeepSpeed MoE Transformer Inference config is ", self.config.__dict__)
 
-        self.bias_residual_func = inference_cuda_module.bias_residual_fp16 if config.fp16 or config.q_int8 else \
+        self.bias_residual_func = inference_cuda_module.bias_residual_fp16 if config.fp16 or config.q_int else \
                                         inference_cuda_module.bias_residual_fp32
-        self.ds_layernorm = inference_cuda_module.layer_norm_fp16 if self.config.fp16 or self.config.q_int8 else \
+        self.ds_layernorm = inference_cuda_module.layer_norm_fp16 if self.config.fp16 or self.config.q_int else \
                                         inference_cuda_module.layer_norm_fp32
-        self.einsum_sec_sm_ecm = inference_cuda_module.einsum_sec_sm_ecm_fp16 if self.config.fp16 or self.config.q_int8 else \
+        self.einsum_sec_sm_ecm = inference_cuda_module.einsum_sec_sm_ecm_fp16 if self.config.fp16 or self.config.q_int else \
                                         inference_cuda_module.einsum_sec_sm_ecm_fp32
 
     def res_coef_func(self, inp, async_op):
@@ -385,7 +385,7 @@ class DeepSpeedMoEInference(nn.Module):
         input_mask = input_mask if attention_mask is None else attention_mask
         input_type = input.dtype
 
-        if (self.config.fp16 or self.config.q_int8) \
+        if (self.config.fp16 or self.config.q_int) \
             and input.dtype == torch.float:
             input = input.half()
 

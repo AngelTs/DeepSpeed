@@ -39,6 +39,8 @@ class InferenceEngine(Module):
                  injection_dict=None,
                  return_tuple=True,
                  replace_method='auto',
+                 quantize=False,
+                 quantize_bits=8,
                  quantization_setting=None,
                  replace_with_kernel_inject=False,
                  moe=False,
@@ -83,6 +85,8 @@ class InferenceEngine(Module):
         self.replace_method = replace_method
         self.quantize_merge_count = 1
         self.quantization_scales = None
+        self.quantize = quantize
+        self.quantize_bits = quantize_bits
         self.triangular_masking = triangular_masking
         self.ep_size = ep_size
         self.ep_group = ep_group
@@ -190,7 +194,6 @@ class InferenceEngine(Module):
                         self.expert_mp_group.update({moe_ep_size: _expert_mp_group})
 
     def _init_quantization_setting(self, quantization_setting):
-        self.quantize_bits = 8
         self.mlp_extra_grouping = False
         self.quantize_groups = 1
         if type(quantization_setting) is tuple:
@@ -250,7 +253,8 @@ class InferenceEngine(Module):
                                   or (self.dtype == torch.int8),
                                   training=False,
                                   return_tuple=return_tuple,
-                                  quantize=(self.dtype == torch.int8),
+                                  quantize=self.quantize or (self.dtype == torch.int8),
+                                  quantize_bits=self.quantize_bits,
                                   quantize_settings=(self.quantization_scales,
                                                      self.quantize_merge_count,
                                                      self.mlp_extra_grouping,
