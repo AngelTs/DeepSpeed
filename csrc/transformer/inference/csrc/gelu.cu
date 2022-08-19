@@ -558,6 +558,7 @@ __device__ void quantize_kernel_glue(float2* data,
         auto temp = g.shfl_xor(max, i);
         if (__hgt(temp, max)) max = temp;
     }
+
     __shared__ __half partialMax[WARP_SIZE];
 
     if (lane == 0) partialMax[gid] = max;
@@ -596,6 +597,90 @@ __device__ void quantize_kernel_glue(float2* data,
     }
     if (threadIdx.x == 0) q_scale_d[blockIdx.x] = 1 / q_scale;
 }
+
+struct int4x2_t {
+    int8_t low : 4;
+    int8_t high : 4;
+};
+
+__device__ void quantize_4bits_kernel(float2* data,
+                                     unsigned cnt,
+                                     int8_t* vals_int,
+                                     float* q_scale_d,
+                                     int group_size)
+{
+    cg::thread_block b = cg::this_thread_block();
+    cg::thread_block_tile<32> g = cg::tiled_partition<32>(b);
+
+    int gid = threadIdx.x >> 5;
+    int lane = threadIdx.x & 0x1f;
+    int warp_num = blockDim.x >> 5;
+    int id = threadIdx.x;
+
+    __half* vals_int_cast = reinterpret_cast<__half*>(vals_int);
+
+    __half max = -10000.0;
+    int bid = blockIdx.x;
+    unsigned group_index;
+    for (int i = 0; i < cnt; i++) {
+        __half* data_h = reinterpret_cast<__half*>(&data[i]);
+        if (__hgt(__habs(data_h[0]), max)) max = __habs(data_h[0]);
+        if (__hgt(__habs(data_h[1]), max)) max = __habs(data_h[1]);
+        if (__hgt(__habs(data_h[2]), max)) max = __habs(data_h[2]);
+        if (__hgt(__habs(data_h[3]), max)) max = __habs(data_h[3]);
+    }
+
+#pragma unroll
+    for (int i = 1; i < WARP_SIZE; i <<= 1) {
+        auto temp = g.shfl_xor(max, i);
+        if (__hgt(temp, max)) max = temp;
+    }
+
+    __shared__ __half partialMax[WARP_SIZE];
+
+    if (lane == 0) partialMax[gid] = max;
+
+    b.sync();
+
+    max = partialMax[lane];
+
+    b.sync();
+
+#pragma unroll
+    for (int i = 1; i < warp_num; i <<= 1) {
+        auto temp = g.shfl_xor(max, i);
+        if (__hgt(temp, max)) max = temp;
+    }
+    max = g.shfl(max, 0);
+
+    float q_scale = (1 << 4) / (2 * (float)max);
+    int h_range = 7;
+    int l_range = -8;
+
+    group_index = threadIdx.x + bid * group_size;
+    for (int i = 0; i < cnt; i++) {
+        __half q_data_int;
+        int8_t* q_data_4 = reinterpret_cast<int8_t*>(&q_data_int);
+        __half* data_h = reinterpret_cast<__half*>(&data[i]);
+        int32_t data_f[4];
+        data_f[0] = round((float)data_h[0] * q_scale);
+        data_f[1] = round((float)data_h[1] * q_scale);
+        data_f[2] = round((float)data_h[2] * q_scale);
+        data_f[3] = round((float)data_h[3] * q_scale);
+        int8_t v0 = data_f[0] > h_range ? h_range : (data_f[0] < l_range ? l_range : data_f[0]);
+        int8_t v1 = data_f[1] > h_range ? h_range : (data_f[1] < l_range ? l_range : data_f[1]);
+        int8_t v2 = data_f[2] > h_range ? h_range : (data_f[2] < l_range ? l_range : data_f[2]);
+        int8_t v3 = data_f[3] > h_range ? h_range : (data_f[3] < l_range ? l_range : data_f[3]);
+        auto e1 = int4x2_t{v0, v1};
+        auto e2 = int4x2_t{v2, v3};
+        q_data_4[0] = *((int8_t*)(&e1));
+        q_data_4[1] = *((int8_t*)(&e2));
+        vals_int_cast[group_index] = q_data_int;
+        group_index += (blockDim.x);
+    }
+    if (threadIdx.x == 0) q_scale_d[blockIdx.x] = 1 / q_scale;
+}
+
 __global__ void fused_bias_gelu_int8(int8_t* output,
                                      float* scales,
                                      __half* input,
@@ -667,6 +752,27 @@ __global__ void quantize_int8(int8_t* output,
     quantize_kernel_glue(vals_vec, cnt, output, scales, 8, intermediate_size);
 }
 
+__global__ void quantize_4bits(int8_t* output,
+                              float* scales,
+                              __half* input,
+                              int total_count,
+                              int intermediate_size)
+{
+    float2* input_cast = reinterpret_cast<float2*>(input);
+
+    int offset = blockIdx.x * intermediate_size;
+    int id = threadIdx.x;
+    float2 vals_vec[8];
+    unsigned cnt = 0;
+    while (id < intermediate_size) {
+        vals_vec[cnt] = input_cast[offset + id];
+
+        id += blockDim.x;
+        cnt++;
+    }
+    quantize_4bits_kernel(vals_vec, cnt, output, scales, intermediate_size);
+}
+
 void launch_bias_gelu_int8(int8_t* output,
                            float* scales,
                            __half* input,
@@ -698,6 +804,24 @@ void launch_me(int8_t* output,
 
     quantize_int8<<<grid_dims, block_dims, 0, stream>>>(
         output, scales, input, total_count, intermediate_size / 4);
+}
+
+void launch_me_int4(int8_t* output,
+               float* scales,
+               __half* input,
+               int intermediate_size,
+               int batch_seq,
+               cudaStream_t stream)
+{
+    int granularity = 4;
+    int total_count = batch_seq * (intermediate_size / granularity);
+    int threads = 1024;
+    dim3 block_dims(threads);
+    dim3 grid_dims(batch_seq);
+
+    quantize_4bits<<<grid_dims, block_dims, 0, stream>>>(
+        output, scales, input, total_count, intermediate_size / granularity);
+
 }
 
 __global__ void fused_bias_residual1(float* input,

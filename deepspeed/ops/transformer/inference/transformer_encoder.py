@@ -45,7 +45,7 @@ class DeepSpeedEncoderFunction(Function):
              config.epsilon,
              norm_factor,
              config.q_int,
-            #  config.bits,
+             config.q_bits,
              mlp_weights[1].scale,
              mlp_weights[0].scale,
              attn_weights[1].scale,
@@ -85,8 +85,6 @@ class DeepSpeedEncoder(nn.Module):
                  mp_group=None,
                  quantize_scales=None,
                  quantize_groups=1,
-                 quantize=False,
-                 quantize_bits=8,
                  merge_count=1,
                  mlp_extra_grouping=False,
                  qkv_merging=False):
@@ -107,14 +105,12 @@ class DeepSpeedEncoder(nn.Module):
                                                 mp_group,
                                                 quantize_scales,
                                                 quantize_groups,
-                                                quantize_bits,
                                                 merge_count,
                                                 qkv_merging)
         self.mlp = DeepSpeedMLP(self.config,
                                 mp_group,
                                 quantize_scales,
                                 quantize_groups,
-                                quantize_bits,
                                 merge_count,
                                 mlp_extra_grouping)
 
@@ -144,6 +140,21 @@ class DeepSpeedEncoder(nn.Module):
         input_mask = (input_mask if attn_mask is None else
                       attn_mask) if attention_mask is None else attention_mask
         input = x if input is None else input
+
+        # print(f"input shape {input.shape}")
+        # print(f"input mask {input_mask.shape}")
+        # print(f"self.attention.attn_qkvw.shape {self.attention.attn_qkvw.shape}")
+        # print(f"self.attention.attn_qkvb.shape {self.attention.attn_qkvb.shape}")
+        # print(f"self.attention.attn_ow.shape {self.attention.attn_ow.shape}")
+        # print(f"self.attention.attn_ob.shape {self.attention.attn_ob.shape}")
+        # print(f"self.mlp.inter_w.shape {self.mlp.inter_w.shape}")
+        # print(f"self.mlp.output_w.shape {self.mlp.output_w.shape}")
+        # print(f"self.mlp.inter_b.shape {self.mlp.inter_b.shape}")
+        # print(f"self.mlp.output_b.shape {self.mlp.output_b.shape}")
+        # print(f"self.mlp.attn_nw.shape {self.mlp.attn_nw.shape}")
+        # print(f"self.mlp.attn_nb.shape {self.mlp.attn_nb.shape}")
+        # print(f"self.norm_w.shape {self.norm_w.shape}")
+        # print(f"self.norm_b.shape {self.norm_b.shape}")
         return DeepSpeedEncoderFunction.apply(
             input,
             input_mask,

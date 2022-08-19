@@ -25,6 +25,29 @@ class LinearAllreduce(nn.Module):
         return output
 
 
+def packInt4(input, output =None):
+    assert input.dtype == torch.int8, "input to packInt4 must be torch.int8"
+    packed_size = 2
+    nbits = 4
+    dim = -1
+    shape = list(input.shape)
+
+    def ceil(n):
+        return int(-1 * n // 1 * -1)
+    shape[dim] = int(ceil(shape[dim] / packed_size))
+    output = output.zero_() if output is not None else torch.zeros(shape, device = input.device, dtype = torch.int8)
+    assert tuple(output.shape) == tuple(shape)
+
+    sliced_input = input[(slice(None),) + (slice(0, None, packed_size), )]
+    compress0 = torch.bitwise_left_shift(sliced_input, 4)
+
+    sliced_input = input[(slice(None),) + (slice(1, None, packed_size), )]
+    compress1 = torch.bitwise_and(sliced_input, 15)
+
+    output = output.narrow(dim, 0, sliced_input.shape[dim])
+    output = torch.bitwise_or(compress0 , compress1)
+    return output
+
 class GroupQuantizer:
     def __init__(self, q_int=True, num_groups=32, group_size=32, num_bits=8):
         self.num_groups = num_groups
@@ -45,6 +68,8 @@ class GroupQuantizer:
         scale = torch.max(input_min.abs(), input_max.abs()) * 2.0 / (q_range)
         input_flat = (input_flat / scale).round().clamp(-q_range // 2, q_range // 2 - 1)
         inputs_q = input_flat.reshape(inputs.shape).to(torch.int8).contiguous()
+        if self.num_bits==4 and count == -1:
+            inputs_q = packInt4(inputs_q)
         out = torch.nn.Parameter(inputs_q, requires_grad=False)
         out.scale = scale
         return out
@@ -309,6 +334,7 @@ def replace_transformer_layer(orig_layer_impl,
                     pre_layer_norm=preln,
                     mp_size=mp_size,
                     q_int=quantize,
+                    q_bits=quantize_bits,
                     return_tuple=(return_tuple or (policy_cls is HFBertLayerPolicy)),
                     triangular_masking=(policy_cls is not HFBertLayerPolicy
                                         and policy_cls is not HFDistilBertLayerPolicy),
@@ -344,7 +370,7 @@ def replace_transformer_layer(orig_layer_impl,
                     if (policy_cls is HFBertLayerPolicy
                             or policy_cls is HFDistilBertLayerPolicy):
                         new_module = transformer_inference.DeepSpeedEncoder(
-                            transformer_config, quantize=True, quantize_bits=quantize_bits,)
+                            transformer_config)
                     else:
                         new_module = transformer_inference.DeepSpeedTransformerInference(
                             transformer_config,
@@ -457,10 +483,10 @@ def replace_transformer_layer(orig_layer_impl,
                 _res_coef.data = transpose(_res_coef.data)
 
             attn_block = new_module.attention
-            attn_block.attn_qkvw = quantizer.quantize(qkvw)
+            attn_block.attn_qkvw = quantizer.quantize(qkvw, count=-1)
             attn_block.attn_qkvb = mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
-            attn_block.attn_ow = quantizer.quantize(dense_w)
+            attn_block.attn_ow = quantizer.quantize(dense_w, count=-1)
             attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
 
             mpl_block = new_module.mlp
@@ -493,9 +519,9 @@ def replace_transformer_layer(orig_layer_impl,
                         torch.cuda.current_device())
                     new_module.res_coef.data = _res_coef.to(torch.cuda.current_device())
             else:
-                mpl_block.inter_w = quantizer.quantize(_h4h_w)
+                mpl_block.inter_w = quantizer.quantize(_h4h_w, count=-1)
                 mpl_block.inter_b.data = mp_replace.copy(mpl_block.inter_b, _h4h_b)
-                mpl_block.output_w = quantizer.quantize(_4hh_w)
+                mpl_block.output_w = quantizer.quantize(_4hh_w, count=-1)
                 mpl_block.output_b.data = mp_replace.copy(mpl_block.output_b, _4hh_b)
                 if attn_nw is None:
                     new_module.mlp.attn_nw = attn_nw

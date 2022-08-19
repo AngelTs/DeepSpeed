@@ -238,7 +238,6 @@ class DeepSpeedSelfAttention(nn.Module):
                  mp_group=None,
                  q_scales=None,
                  q_groups=1,
-                 q_bits=8,
                  merge_count=1,
                  qkv_merging=False):
         super(DeepSpeedSelfAttention, self).__init__()
@@ -271,7 +270,6 @@ class DeepSpeedSelfAttention(nn.Module):
         # used for quantization
         self.q_scales = q_scales
         self.q_groups = q_groups
-        self.q_bits = q_bits
         self.merge_count = int(math.log2(merge_count))
 
         self.norm_factor = math.sqrt(
@@ -319,7 +317,6 @@ class DeepSpeedSelfAttention(nn.Module):
             self.mp_group,
             self.q_scales,
             self.q_groups,
-            self.q_bits,
             self.merge_count,
             self.qkv_merging,
             self.score_context_func,
@@ -347,7 +344,6 @@ class DeepSpeedMLPFunction(Function):
                 output_w,
                 q_scales,
                 q_groups,
-                q_bits,
                 merge_count,
                 mlp_gemm_func,
                 fused_gemm_gelu,
@@ -404,7 +400,6 @@ class DeepSpeedMLP(nn.Module):
                  mp_group=None,
                  q_scales=None,
                  q_groups=1,
-                 q_bits=8,
                  merge_count=1,
                  mlp_extra_grouping=False):
         super(DeepSpeedMLP, self).__init__()
@@ -425,7 +420,6 @@ class DeepSpeedMLP(nn.Module):
         # used for quantization
         self.q_scales = q_scales
         self.q_groups = q_groups * 2 if mlp_extra_grouping else q_groups
-        self.q_bits = q_bits
         self.merge_count = int(math.log2(merge_count))
 
         self.mp_group = mp_group
@@ -459,7 +453,6 @@ class DeepSpeedMLP(nn.Module):
                                           self.output_w,
                                           self.q_scales,
                                           self.q_groups,
-                                          self.q_bits,
                                           self.merge_count,
                                           self.mlp_gemm_func,
                                           self.fused_gemm_gelu,

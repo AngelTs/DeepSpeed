@@ -28,7 +28,7 @@ class InferenceBuilder(CUDAOpBuilder):
         import deepspeed
         import os
         lib_path = os.path.join(os.path.dirname(deepspeed.__file__), 'ops/libs/cutlass')
-        return [f'-L{lib_path}', '-lgemmlib', '-lcurand']
+        return [f'-L{lib_path}', '-lgemm', '-lcurand']
 
     def include_paths(self):
         return ['csrc/transformer/inference/includes']

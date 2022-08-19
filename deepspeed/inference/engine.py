@@ -350,7 +350,7 @@ class InferenceEngine(Module):
                                                                         self.injection_dict,
                                                                         self.quantize_bits,
                                                                         self.quantize_groups)
-        elif self.dtype == torch.half:
+        elif self.dtype == torch.half or self.dtype is torch.int8 or self.quantize:
             self.module.half()
         elif self.dtype == torch.bfloat16:
             self.module.bfloat16()
