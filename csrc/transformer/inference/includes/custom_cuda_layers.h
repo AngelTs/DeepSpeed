@@ -264,6 +264,15 @@ void launch_bias_gelu_int8(int8_t* output,
                            int intermediate_size,
                            int batch_size,
                            cudaStream_t stream);
+
+void launch_bias_gelu_int4(int8_t* output,
+                           float* scales,
+                           __half* input,
+                           const __half* bias,
+                           int intermediate_size,
+                           int batch_size,
+                           cudaStream_t stream);
+
 template <typename T>
 void launch_residual_layer_norm_int8(int8_t* res_add,
                                      float* scales,

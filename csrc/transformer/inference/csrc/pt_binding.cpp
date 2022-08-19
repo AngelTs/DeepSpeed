@@ -784,7 +784,6 @@ at::Tensor ds_linear_layer(at::Tensor& input,
                            at::Tensor& bias,
                            bool q_int)
 {
-    printf("ds_linear_layer\n");
     auto options = at::TensorOptions()
                        .dtype(input.options().dtype())
                        .layout(at::kStrided)
@@ -1331,14 +1330,14 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
                  bsz1,
                  q_scale1.size(0),
                  Context::Instance().GetCurrentStream());
-        launch_bias_gelu_int8((int8_t*)auxilary_buf,
+        launch_bias_gelu_int4((int8_t*)auxilary_buf,
                               (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
                               (__half*)workspace,
                               (__half*)bias.data_ptr(),
                               out_size,
                               bsz,
                               Context::Instance().GetCurrentStream());
-        run_gemm(auxilary_buf,
+        run_gemm_int4(auxilary_buf,
                  weight_out.data_ptr(),
                  (T*)output.data_ptr(),
                  (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
@@ -1647,7 +1646,6 @@ void TransformerEncoder(at::Tensor& input,
                                                             : bsz_seq + (32 - (bsz_seq % 32)))
                                      : bsz_seq + (64 - (bsz_seq % 64)))
                         : bsz_seq + (128 - (bsz_seq % 128));
-    printf("bsz_seq: %d, bsz1: %d, input.size(2): %d, input.size(0): %d\n", bsz_seq, bsz1, input.size(2), input.size(0));
     auto aux_buff =
         (T*)Context::Instance().GetWorkSpace() + 8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
     auto aux_buff1 =
