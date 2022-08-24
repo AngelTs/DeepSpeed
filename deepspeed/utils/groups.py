@@ -416,7 +416,7 @@ def _create_zero_param_parallel_group(group_size):
     assert _ZERO_PARAM_INTRA_PARALLEL_GROUP is None, \
         'ZeRO parameter intra parallel group is already initialized'
 
-    log_dist(f'Creating param partitioning group in ZeRO with size {group_size}', ranks=[0])
+    #log_dist(f'Creating param partitioning group in ZeRO with size {group_size}', ranks=[0])
     world_size = dist.get_world_size()
     rank = dist.get_rank()
 
@@ -428,9 +428,9 @@ def _create_zero_param_parallel_group(group_size):
         ranks = range(i * zero_param_parallel_size_, (i + 1) * zero_param_parallel_size_)
         group = dist.new_group(ranks)
         if i == (rank // zero_param_parallel_size_):
-            logger.info(
-                "SAGE Create Zero param intra group, rank  {}, group ranks {} "
-                .format(rank,ranks))
+            #logger.info(
+            #    "SAGE Create Zero param intra group, rank  {}, group ranks {} "
+            #    .format(rank,ranks))
             _ZERO_PARAM_INTRA_PARALLEL_GROUP = group
 
 

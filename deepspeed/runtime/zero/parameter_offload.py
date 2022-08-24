@@ -270,15 +270,17 @@ class DeepSpeedZeRoOffload(object):
 
     def destroy(self):
         self._remove_module_hooks()
-
+    '''
     def invalidate_secondary_partition(self):
         """Invalidate secondary partition in post step call of heirarchical 
            partitioning ZeRO"""
         ##TODO: add or replace with fw/bw fn
         for param in iter_params(self.module, recurse=True):
-            param.ds_secondary_group_tensor=None
+            print_rank_0(f"BEGIN use_sec {param.use_secondary_tensor}", force=True)
+            #param.ds_secondary_group_tensor=None
             param.use_secondary_tensor = False
-
+            print_rank_0(f"END use_sec {param.use_secondary_tensor}", force=True)
+    '''
     def _remove_module_hooks(self):
         num_forward_hooks = len(self.forward_hooks)
         num_backward_hooks = len(self.backward_hooks)
@@ -481,7 +483,7 @@ class DeepSpeedZeRoOffload(object):
             force=False)
 
         param_coordinator = self.get_param_coordinator(training=sub_module.training)
-        param_coordinator.release_sub_module(sub_module)
+        param_coordinator.release_sub_module(sub_module,backward=False)
 
         see_memory_usage(
             f"After sub module function {sub_module.__class__.__name__}  {sub_module.id} after release",
@@ -502,7 +504,7 @@ class DeepSpeedZeRoOffload(object):
             force=False)
 
         self.get_param_coordinator(
-            training=sub_module.training).release_sub_module(sub_module)
+            training=sub_module.training).release_sub_module(sub_module,backward=True)
 
         see_memory_usage(
             f"After sub module backward function {sub_module.__class__.__name__} {sub_module.id} after release",

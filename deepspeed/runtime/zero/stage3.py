@@ -155,6 +155,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         self.zero_param_group_size = zero_param_group_size
 
         zpg = None
+        print_rank_0(f"SAGE ZPG {self.zero_param_group_size} NOT SELF {zero_param_group_size}", force=True)
         if self.zero_param_group_size > 1:
             self._set_zero_group_parallelism()
             zpg = groups._get_zero_param_intra_parallel_group()
@@ -1862,12 +1863,13 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
             self.optimizer_swapper.log_timers()
 
         ##Invalidate secondary partition
+        '''
         if self.parameter_offload:
-            print_rank_0(f"INVALIDATE secondary partition",force=False)
+            print_rank_0(f"INVALIDATE secondary partition",force=True)
             self.parameter_offload.invalidate_secondary_partition()
-
+        '''
         self.log_timers(timer_names)
-
+       
         see_memory_usage('After zero_optimizer step', force=False)
         print_rank_0(f"------------------Finishing Step-----------------------")
 

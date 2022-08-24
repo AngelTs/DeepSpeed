@@ -389,7 +389,7 @@ class PartitionedParameterCoordinator:
 
     @instrument_w_nvtx
     @torch.no_grad()
-    def release_sub_module(self, submodule: Module) -> None:
+    def release_sub_module(self, submodule: Module, backward:bool) -> None:
         """release the parameters of a sub module, assuming they meet conditions to
         be released."""
         params_to_release = (self.__params_to_release(submodule,
@@ -399,7 +399,7 @@ class PartitionedParameterCoordinator:
         for param in iter_params(submodule):
             param.ds_active_sub_modules.discard(submodule.id)
             if param.ds_id in params_to_release and not param.is_external_param:
-                self.__release_param(param)
+                self.__release_param(param,backward)
 
     @instrument_w_nvtx
     @torch.no_grad()
@@ -412,7 +412,7 @@ class PartitionedParameterCoordinator:
             # TODO. make this throw if if there are still active submodules. currently
             # there's a hook execution issue
             param.ds_active_sub_modules.clear()
-            self.__release_param(param)
+            self.__release_param(param,backward=False) ###SAGE TODO, check that this only called in at begin step (fwd)
 
         for param in iter_params(module, recurse=True):
             if param.ds_status != ZeroParamStatus.NOT_AVAILABLE:
@@ -452,10 +452,10 @@ class PartitionedParameterCoordinator:
                         swap_persisted_params)
 
     @instrument_w_nvtx
-    def __release_param(self, param: Parameter) -> None:
+    def __release_param(self, param: Parameter, backward:bool) -> None:
         if param.ds_status == ZeroParamStatus.AVAILABLE and not param.ds_active_sub_modules:
             debug_rank0(f"-release: {param.ds_summary()}")
-            param.partition()
+            param.partition(backward=backward)
             self.__n_available_params -= param.ds_numel
 
     @instrument_w_nvtx
