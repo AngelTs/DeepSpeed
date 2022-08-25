@@ -51,7 +51,8 @@ class InferenceEngine(Module):
                  moe_type='standard',
                  config=None,
                  enable_cuda_graph=False,
-                 save_mp_checkpoint_path=None):
+                 save_mp_checkpoint_path=None,
+                 enable_qkv_quantization=False):
         """
         Args:
             model: torch.nn.Module
@@ -145,7 +146,8 @@ class InferenceEngine(Module):
                 moe_type=moe_type,
                 training_mp_size=training_mp_size,
                 checkpoint_dir=self.checkpoint if replace_with_kernel_inject else None,
-                save_mp_checkpoint_path=save_mp_checkpoint_path)
+                save_mp_checkpoint_path=save_mp_checkpoint_path,
+                enable_qkv_quantization=enable_qkv_quantization)
 
         device = torch.cuda.current_device()
         self.module.to(device)
@@ -326,7 +328,8 @@ class InferenceEngine(Module):
                                 moe_type='standard',
                                 training_mp_size=1,
                                 checkpoint_dir=None,
-                                save_mp_checkpoint_path=False):
+                                save_mp_checkpoint_path=False,
+                                enable_qkv_quantization=False):
         checkpoint = SDLoaderFactory.get_sd_loader_json(
             checkpoint_dir,
             self.checkpoint_engine) if checkpoint_dir is not None else None
@@ -355,6 +358,7 @@ class InferenceEngine(Module):
             training_mp_size=training_mp_size,
             checkpoint_dict=checkpoint,
             save_mp_checkpoint_path=save_mp_checkpoint_path,
+            enable_qkv_quantization=enable_qkv_quantization
         )
 
     def _get_all_ckpt_names(self, checkpoints_path, tag):
@@ -450,13 +454,13 @@ class InferenceEngine(Module):
             return 'model'
 
     def _convert_to_dtype(self):
-        if self.dtype is torch.int8 and self.quantization_scales is None:
+        if False:  #self.dtype is torch.int8 and self.quantization_scales is None:
             quantizer = WeightQuantization(mlp_extra_grouping=self.mlp_extra_grouping)
             model, self.quantization_scales = quantizer.model_quantize(self.module,
                                                                         self.injection_dict,
                                                                         self.quantize_bits,
                                                                         self.quantize_groups)
-        elif self.dtype == torch.half:
+        elif self.dtype == torch.half or self.dtype is torch.int8:
             self.module.half()
         elif self.dtype == torch.bfloat16:
             self.module.bfloat16()

@@ -1,5 +1,6 @@
 #include "custom_cuda_layers.h"
 
+namespace cg = cooperative_groups;
 #define MAX_CAP 4
 #define MAX_SEQ 2048
 
@@ -201,7 +202,7 @@ __global__ void fused_bias_residual(float* input,
             data.z = data.z + out.z + bias_data.z;
             data.w = data.w + out.w + bias_data.w;
         }
-        output_cast[offset] = data;
+        input_cast[offset] = data;
     }
 }
 
@@ -273,7 +274,7 @@ __global__ void fused_bias_residual(__half* input,
         vals_half[0] = __float22half2_rn(low_data);
         vals_half[1] = __float22half2_rn(high_data);
 
-        output_cast[offset] = vals_vec;
+        input_cast[offset] = vals_vec;
     }
 #endif
 }
@@ -337,7 +338,7 @@ __global__ void gptj_residual_add(float* input,
         data.z = data.z * mp_scale + (out.z + res_vec.z + bias_data.z);
         data.w = data.w * mp_scale + (out.w + res_vec.w + bias_data.w);
 
-        output_cast[offset] = data;
+        input_cast[offset] = data;
     }
 }
 
@@ -367,7 +368,8 @@ __global__ void gptj_residual_add(__half* input,
         float2 res_vec = attn_cast[offset];
 
         float2 bias_vec = bias_cast[offset % intermediate_size];
-
+        float2 attn_bias_vec;
+        if (attn_bias) attn_bias_vec = attnbias_cast[offset % intermediate_size];
         __half2* vals_half = reinterpret_cast<__half2*>(&vals_vec);
         __half2* out_half = reinterpret_cast<__half2*>(&out_vec);
         __half2* res_half = reinterpret_cast<__half2*>(&res_vec);
@@ -395,15 +397,23 @@ __global__ void gptj_residual_add(__half* input,
             high_data.y += attn_high_bias.y;
         }
 
-        low_data.x = low_data.x * mp_scale + (low_out.x + low_res.x + (low_bias.x));
-        low_data.y = low_data.y * mp_scale + (low_out.y + low_res.y + (low_bias.y));
-        high_data.x = high_data.x * mp_scale + (high_out.x + high_res.x + (high_bias.x));
-        high_data.y = high_data.y * mp_scale + (high_out.y + high_res.y + (high_bias.y));
+        float2 attn_low_bias = __half22float2(attnbias_half[0]);
+        float2 attn_high_bias = __half22float2(attnbias_half[1]);
+
+        // TODO: note for Reza to check this later post-rebase, it might not be correct
+        low_data.x = low_data.x * mp_scale +
+                     (low_out.x + low_res.x + (low_bias.x + (attn_bias ? attn_low_bias.x : 0)));
+        low_data.y = low_data.y * mp_scale +
+                     (low_out.y + low_res.y + (low_bias.y + (attn_bias ? attn_low_bias.y : 0)));
+        high_data.x = high_data.x * mp_scale + (high_out.x + high_res.x +
+                                               (high_bias.x + (attn_bias ? attn_high_bias.x : 0)));
+        high_data.y = high_data.y * mp_scale + (high_out.y + high_res.y +
+                                               (high_bias.y + (attn_bias ? attn_high_bias.y : 0)));
 
         vals_half[0] = __float22half2_rn(low_data);
         vals_half[1] = __float22half2_rn(high_data);
 
-        output_cast[offset] = vals_vec;
+        input_cast[offset] = vals_vec;
     }
 #endif
 }
@@ -539,3 +549,321 @@ template void launch_moe_res_matmul(__half* residual,
                                     int seq_len,
                                     int hidden_dim,
                                     cudaStream_t stream);
+
+__device__ void quantize_kernel_glue(float2* data,
+                                     unsigned cnt,
+                                     int8_t* vals_int,
+                                     float* q_scale_d,
+                                     int num_bits,
+                                     int group_size)
+{
+    cg::thread_block b = cg::this_thread_block();
+    cg::thread_block_tile<32> g = cg::tiled_partition<32>(b);
+
+    int gid = threadIdx.x >> 5;
+    int lane = threadIdx.x & 0x1f;
+    int warp_num = blockDim.x >> 5;
+    int id = threadIdx.x;
+
+    float* vals_int_cast = reinterpret_cast<float*>(vals_int);
+
+    __half max = -10000.0;
+    int bid = blockIdx.x;
+    unsigned group_index;
+    for (int i = 0; i < cnt; i++) {
+        __half* data_h = reinterpret_cast<__half*>(&data[i]);
+        if (__hgt(__habs(data_h[0]), max)) max = __habs(data_h[0]);
+        if (__hgt(__habs(data_h[1]), max)) max = __habs(data_h[1]);
+        if (__hgt(__habs(data_h[2]), max)) max = __habs(data_h[2]);
+        if (__hgt(__habs(data_h[3]), max)) max = __habs(data_h[3]);
+    }
+
+#pragma unroll
+    for (int i = 1; i < WARP_SIZE; i <<= 1) {
+        auto temp = g.shfl_xor(max, i);
+        if (__hgt(temp, max)) max = temp;
+    }
+    __shared__ __half partialMax[WARP_SIZE];
+
+    if (lane == 0) partialMax[gid] = max;
+
+    b.sync();
+
+    max = partialMax[lane];
+
+    b.sync();
+
+#pragma unroll
+    for (int i = 1; i < warp_num; i <<= 1) {
+        auto temp = g.shfl_xor(max, i);
+        if (__hgt(temp, max)) max = temp;
+    }
+    max = g.shfl(max, 0);
+
+    float q_scale = (1 << num_bits) / (2 * (float)max + 1e-5);
+
+    group_index = threadIdx.x + bid * group_size;
+    for (int i = 0; i < cnt; i++) {
+        float q_data_int;
+        int8_t* q_data_8 = reinterpret_cast<int8_t*>(&q_data_int);
+        __half* data_h = reinterpret_cast<__half*>(&data[i]);
+        int32_t data_f[4];
+        data_f[0] = round((float)data_h[0] * q_scale);
+        data_f[1] = round((float)data_h[1] * q_scale);
+        data_f[2] = round((float)data_h[2] * q_scale);
+        data_f[3] = round((float)data_h[3] * q_scale);
+        q_data_8[0] = data_f[0] > 127 ? 127 : (data_f[0] < -128 ? -128 : data_f[0]);
+        q_data_8[1] = data_f[1] > 127 ? 127 : (data_f[1] < -128 ? -128 : data_f[1]);
+        q_data_8[2] = data_f[2] > 127 ? 127 : (data_f[2] < -128 ? -128 : data_f[2]);
+        q_data_8[3] = data_f[3] > 127 ? 127 : (data_f[3] < -128 ? -128 : data_f[3]);
+        // q_data_8[0] = !(data_f[0] & 0x80000000) && (data_f[0] & 0x00000080) ? 127 : data_f[0];
+        // q_data_8[1] = !(data_f[1] & 0x80000000) && (data_f[1] & 0x00000080) ? 127 : data_f[1];
+        // q_data_8[2] = !(data_f[2] & 0x80000000) && (data_f[2] & 0x00000080) ? 127 : data_f[2];
+        // q_data_8[3] = !(data_f[3] & 0x80000000) && (data_f[3] & 0x00000080) ? 127 : data_f[3];
+        vals_int_cast[group_index] = q_data_int;
+        group_index += (blockDim.x);
+    }
+    if (threadIdx.x == 0) q_scale_d[blockIdx.x] = 1 / q_scale;
+}
+__global__ void fused_bias_gelu_int8(int8_t* output,
+                                     float* scales,
+                                     __half* input,
+                                     const __half* bias,
+                                     int total_count,
+                                     int intermediate_size)
+{
+#if __CUDA_ARCH__ >= 700
+
+    float2* input_cast = reinterpret_cast<float2*>(input);
+    const float2* bias_cast = reinterpret_cast<const float2*>(bias);
+
+    int offset = blockIdx.x * intermediate_size;
+    int id = threadIdx.x;
+    float2 vals_vec[8];
+    unsigned cnt = 0;
+    while (id < intermediate_size) {
+        vals_vec[cnt] = input_cast[offset + id];
+        float2 bias_vec = bias_cast[id];
+
+        __half2* vals_half = reinterpret_cast<__half2*>(vals_vec + cnt);
+
+        float2 low_data = __half22float2(vals_half[0]);
+        float2 high_data = __half22float2(vals_half[1]);
+
+        __half2* bias_half = reinterpret_cast<__half2*>(&bias_vec);
+
+        float2 low_bias = __half22float2(bias_half[0]);
+        float2 high_bias = __half22float2(bias_half[1]);
+
+        low_data.x += low_bias.x;
+        low_data.y += low_bias.y;
+        high_data.x += high_bias.x;
+        high_data.y += high_bias.y;
+
+        low_data.x = gelu(low_data.x);
+        low_data.y = gelu(low_data.y);
+        high_data.x = gelu(high_data.x);
+        high_data.y = gelu(high_data.y);
+
+        vals_half[0] = __float22half2_rn(low_data);
+        vals_half[1] = __float22half2_rn(high_data);
+
+        // input_cast[offset + id] = vals_vec;
+        id += blockDim.x;
+        cnt++;
+    }
+    quantize_kernel_glue(vals_vec, cnt, output, scales, 8, intermediate_size);
+#endif
+}
+__global__ void quantize_int8(int8_t* output,
+                              float* scales,
+                              __half* input,
+                              int total_count,
+                              int intermediate_size)
+{
+    float2* input_cast = reinterpret_cast<float2*>(input);
+
+    int offset = blockIdx.x * intermediate_size;
+    int id = threadIdx.x;
+    float2 vals_vec[8];
+    unsigned cnt = 0;
+    while (id < intermediate_size) {
+        vals_vec[cnt] = input_cast[offset + id];
+
+        id += blockDim.x;
+        cnt++;
+    }
+    quantize_kernel_glue(vals_vec, cnt, output, scales, 8, intermediate_size);
+}
+
+void launch_bias_gelu_int8(int8_t* output,
+                           float* scales,
+                           __half* input,
+                           const __half* bias,
+                           int intermediate_size,
+                           int batch_size,
+                           cudaStream_t stream)
+{
+    int total_count = batch_size * (intermediate_size / 4);
+    int threads = 1024;  // intermediate_size / iterations / 4;
+    dim3 block_dims(threads);
+    dim3 grid_dims(batch_size);  // (batch_size);
+
+    fused_bias_gelu_int8<<<grid_dims, block_dims, 0, stream>>>(
+        output, scales, input, bias, total_count, intermediate_size / 4);
+}
+
+void launch_me(int8_t* output,
+               float* scales,
+               __half* input,
+               int intermediate_size,
+               int batch_size,
+               cudaStream_t stream)
+{
+    int total_count = batch_size * (intermediate_size / 4);
+    int threads = 1024;  // intermediate_size / iterations / 4;
+    dim3 block_dims(threads);
+    dim3 grid_dims(batch_size);  // (batch_size);
+
+    quantize_int8<<<grid_dims, block_dims, 0, stream>>>(
+        output, scales, input, total_count, intermediate_size / 4);
+}
+
+__global__ void fused_bias_residual1(float* input,
+                                     const float* residual,
+                                     const float* output,
+                                     const float* bias,
+                                     const float* bias1,
+                                     int total_count,
+                                     int intermediate_size,
+                                     bool preln)
+{
+    float4* input_cast = reinterpret_cast<float4*>(input);
+    const float4* residual_cast = reinterpret_cast<const float4*>(residual);
+    const float4* out_cast = reinterpret_cast<const float4*>(output);
+    const float4* bias_cast = reinterpret_cast<const float4*>(bias);
+    const float4* bias1_cast = reinterpret_cast<const float4*>(bias1);
+    int offset = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (offset < total_count) {
+        float4 data = input_cast[offset];
+        float4 res_vec = residual_cast[offset];
+        float4 out_vec = out_cast[offset];
+        float4 bias_data = bias_cast[offset % intermediate_size];
+        data.x += (res_vec.x + bias_data.x + out_vec.x + bias_data.x);
+        data.y += (res_vec.y + bias_data.y + out_vec.y + bias_data.y);
+        data.z += (res_vec.z + bias_data.z + out_vec.z + bias_data.z);
+        data.w += (res_vec.w + bias_data.w + out_vec.w + bias_data.w);
+        if (preln) { bias_data = bias1_cast[offset % intermediate_size]; }
+        data.x = preln ? (data.x + bias_data.x) : data.x;
+        data.y = preln ? (data.y + bias_data.y) : data.y;
+        data.z = preln ? (data.z + bias_data.z) : data.z;
+        data.w = preln ? (data.w + bias_data.w) : data.w;
+        input_cast[offset] = data;
+    }
+}
+
+__global__ void fused_bias_residual1(__half* input,
+                                     const __half* residual,
+                                     const __half* output,
+                                     const __half* bias,
+                                     const __half* bias1,
+                                     int total_count,
+                                     int intermediate_size,
+                                     bool preln)
+{
+#ifdef HALF_PRECISION_AVAILABLE
+
+    float2* input_cast = reinterpret_cast<float2*>(input);
+    const float2* residual_cast = reinterpret_cast<const float2*>(residual);
+    const float2* out_cast = reinterpret_cast<const float2*>(output);
+
+    const float2* bias_cast = reinterpret_cast<const float2*>(bias);
+    const float2* bias1_cast = reinterpret_cast<const float2*>(bias1);
+
+    int offset = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (offset < total_count) {
+        float2 vals_vec = input_cast[offset];
+        float2 res_vec = residual_cast[offset];
+        float2 out_vec = out_cast[offset];
+
+        __half2* vals_half = reinterpret_cast<__half2*>(&vals_vec);
+        __half2* res_half = reinterpret_cast<__half2*>(&res_vec);
+
+        __half2* out_half = reinterpret_cast<__half2*>(&out_vec);
+
+        float2 low_data = __half22float2(vals_half[0]);
+        float2 high_data = __half22float2(vals_half[1]);
+
+        float2 low_res = __half22float2(res_half[0]);
+        float2 high_res = __half22float2(res_half[1]);
+
+        float2 low_out = __half22float2(out_half[0]);
+        float2 high_out = __half22float2(out_half[1]);
+
+        float2 bias_vec = bias_cast[offset % intermediate_size];
+        __half2* bias_half = reinterpret_cast<__half2*>(&bias_vec);
+        float2 low_bias = __half22float2(bias_half[0]);
+        float2 high_bias = __half22float2(bias_half[1]);
+
+        low_data.x += low_out.x + low_bias.x;
+        low_data.y += low_out.y + low_bias.y;
+        high_data.x += high_out.x + high_bias.x;
+        high_data.y += high_out.y + high_bias.y;
+
+        if (preln) {
+            bias_vec = bias1_cast[offset % intermediate_size];
+            low_bias = __half22float2(bias_half[0]);
+            high_bias = __half22float2(bias_half[1]);
+        }
+        low_data.x = preln ? (low_data.x + low_res.x + low_bias.x) : low_data.x;
+        low_data.y = preln ? (low_data.y + low_res.y + low_bias.y) : low_data.y;
+        high_data.x = preln ? (high_data.x + high_res.x + high_bias.x) : high_data.x;
+        high_data.y = preln ? (high_data.y + high_res.y + high_bias.y) : high_data.y;
+
+        vals_half[0] = __float22half2_rn(low_data);
+        vals_half[1] = __float22half2_rn(high_data);
+
+        input_cast[offset] = vals_vec;
+    }
+#endif
+}
+
+template <typename T>
+void launch_bias_residual1(T* input,
+                           const T* residual,
+                           const T* output,
+                           const T* bias,
+                           const T* bias1,
+                           int batch,
+                           int intermediate_size,
+                           bool preln,
+                           cudaStream_t stream)
+{
+    int total_count = batch * intermediate_size / 4;
+    dim3 block_dims(1024);
+    dim3 grid_dims((total_count - 1) / 1024 + 1);  // (batch_size);
+
+    fused_bias_residual1<<<grid_dims, block_dims, 0, stream>>>(
+        input, residual, output, bias, bias1, total_count, intermediate_size / 4, preln);
+}
+
+template void launch_bias_residual1<float>(float*,
+                                           const float*,
+                                           const float*,
+                                           const float*,
+                                           const float*,
+                                           int,
+                                           int,
+                                           bool,
+                                           cudaStream_t);
+template void launch_bias_residual1<__half>(__half*,
+                                            const __half*,
+                                            const __half*,
+                                            const __half*,
+                                            const __half*,
+                                            int,
+                                            int,
+                                            bool,
+                                            cudaStream_t);

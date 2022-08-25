@@ -242,7 +242,8 @@ def init_inference(model,
                    moe_type='standard',
                    args=None,
                    enable_cuda_graph=False,
-                   save_mp_checkpoint_path=None):
+                   save_mp_checkpoint_path=None,
+                   enable_qkv_quantization=False):
     """Initialize the DeepSpeed InferenceEngine.
 
     Arguments:
@@ -309,6 +310,7 @@ def init_inference(model,
                              moe_type,
                              args,
                              enable_cuda_graph,
-                             save_mp_checkpoint_path)
+                             save_mp_checkpoint_path,
+                             enable_qkv_quantization)
 
     return engine

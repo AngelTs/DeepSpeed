@@ -3,7 +3,8 @@ import torch
 import tqdm
 import deepspeed
 import deepspeed.ops.transformer as transformer_inference
-from .replace_policy import HFBertLayerPolicy, HFGPT2LayerPolicy, BLOOMLayerPolicy
+from .replace_policy import HFBertLayerPolicy, HFGPT2LayerPolicy, \
+    BLOOMLayerPolicy, HFGPTJLayerPolicy, HFDistilBertLayerPolicy
 from .replace_policy import replace_policies
 from ..runtime.weight_quantizer import WeightQuantization
 from deepspeed import comm as dist
@@ -13,6 +14,32 @@ from ..runtime.zero import GatheredParameters
 from .layers import LinearAllreduce, LinearLayer
 from .load_checkpoint import load_model_with_checkpoint
 import time
+
+
+class GroupQuantizer:
+    def __init__(self, q_int8=True, num_groups=32, group_size=32, num_bits=8):
+        self.num_groups = num_groups
+        self.group_size = group_size
+        self.num_bits = num_bits
+        self.q_int8 = q_int8
+
+    def quantize(self, inputs, qkv=True, count=1):
+        if not self.q_int8 or not qkv:
+            inputs.scale = torch.empty(1)
+            return inputs
+        q_range = 2**self.num_bits
+        #self.num_groups = inputs.shape[1] // (self.group_size * count)
+        inputs = inputs.to(torch.cuda.current_device())
+        input_flat = inputs.t().contiguous().reshape(self.num_groups, -1).contiguous()
+        input_min = torch.min(input_flat, dim=1, keepdim=True)[0].float()
+        input_max = torch.max(input_flat, dim=1, keepdim=True)[0].float()
+        scale = torch.max(input_min.abs(), input_max.abs()) * 2.0 / (q_range - 2)
+        input_flat = (input_flat / scale).round().clamp(-q_range // 2 + 1,
+                                                        q_range // 2 - 1)
+        inputs_q = input_flat.reshape(inputs.t().shape).to(torch.int8).contiguous()
+        out = torch.nn.Parameter(inputs_q, requires_grad=False)
+        out.scale = scale
+        return out
 
 
 class ReplaceWithTensorSlicing:
@@ -85,6 +112,7 @@ class ReplaceWithTensorSlicing:
     def copy(self, dst, src):
         if src is None:
             return src
+
         src_shape = src.shape
         dst_shape = dst.shape
         if (len(src_shape) == 2 and len(dst_shape) == 2):
@@ -161,7 +189,8 @@ def replace_transformer_layer(orig_layer_impl,
                               moe_experts=1,
                               moe_type='standard',
                               checkpoint_dict=None,
-                              save_mp_checkpoint_path=None):
+                              save_mp_checkpoint_path=None,
+                              enable_qkv_quantization=False):
     """ Replace bert-style transformer layers with DeepSpeed's transformer layer
     Arguments:
         orig_layer_impl (torch.nn.Module): the original transformer layer implementation to look for,
@@ -204,7 +233,11 @@ def replace_transformer_layer(orig_layer_impl,
                             triangular_masking,
                             inference=False,
                             layer_id=0):
-        policy = policy_cls(child, inference=inference)
+        preln = False if policy_cls is HFBertLayerPolicy or policy_cls is HFDistilBertLayerPolicy else preln
+        if policy_cls is HFBertLayerPolicy:
+            policy = policy_cls(child, inference=inference, preln=preln)
+        else:
+            policy = policy_cls(child, inference=inference)
 
         if inference:
             hidden_size, num_attention_heads = policy.get_hidden_heads()
@@ -225,7 +258,7 @@ def replace_transformer_layer(orig_layer_impl,
                 _res_h4h_w, _res_h4h_b, _res_4hh_w, _res_4hh_b, _res_coef = policy.mlp(moe_type)
 
         attn_nw, attn_nb, input_nw, input_nb = policy.layerNorm()
-        if quantize:
+        if False:  #quantize:
             if policy_cls is not HFBertLayerPolicy:
                 qkvw = qkvw.to(torch.int8)
             dense_w = dense_w.to(torch.int8)
@@ -255,6 +288,8 @@ def replace_transformer_layer(orig_layer_impl,
             _res_4hh_w = _res_4hh_w.half()
             _res_coef = _res_coef.half()
 
+        mp_replace = ReplaceWithTensorSlicing(mp_group=mp_group)
+        quantizer = GroupQuantizer(q_int8=quantize)
         #expert_mp_replace = ReplaceWithTensorSlicing(mp_group=expert_mp_group)
 
         if inference:
@@ -295,7 +330,8 @@ def replace_transformer_layer(orig_layer_impl,
                     mp_size=mp_size,
                     q_int8=quantize,
                     return_tuple=(return_tuple or (policy_cls is HFBertLayerPolicy)),
-                    triangular_masking=(policy_cls is not HFBertLayerPolicy),
+                    triangular_masking=(policy_cls is not HFBertLayerPolicy
+                                        and policy_cls is not HFDistilBertLayerPolicy),
                     local_attention=((config.attention_layers[layer_id] == "local")
                                      if hasattr(config,
                                                 'attention_layers') else False),
@@ -305,7 +341,8 @@ def replace_transformer_layer(orig_layer_impl,
                     mlp_after_attn=(rotary_dim is None or rotary_dim < 0),
                     mlp_act_func_type=policy.mlp_act_func_type,
                     training_mp_size=training_mp_size,
-                    bigscience_bloom=bigscience_bloom)
+                    bigscience_bloom=bigscience_bloom,
+                    enable_qkv_quantization=enable_qkv_quantization)
 
             if quantize and quantize_settings is not None:
                 (quantization_scales,
@@ -326,24 +363,29 @@ def replace_transformer_layer(orig_layer_impl,
                         qkv_merging=(policy_cls is HFBertLayerPolicy))
 
                 else:
-                    new_module = transformer_inference.DeepSpeedTransformerInference(
-                        transformer_config,
-                        mp_group=mp_group,
-                        quantize_scales=quantization_scales[layer_id],
-                        quantize_groups=quantize_groups,
-                        merge_count=merge_count,
-                        mlp_extra_grouping=mlp_extra_grouping,
-                        qkv_merging=(policy_cls is HFBertLayerPolicy))
-
-                if quantize and qkvw.dtype != torch.int8:
-                    quantize_bits = 8
-                    quantizer = WeightQuantization()
-                    if policy_cls is HFBertLayerPolicy:
-                        data_quantized, _ = quantizer.quantize_data(qkvw.data, quantize_bits, quantize_groups * 3)
+                    if (policy_cls is HFBertLayerPolicy
+                            or policy_cls is HFDistilBertLayerPolicy):
+                        new_module = transformer_inference.DeepSpeedEncoder(
+                            transformer_config)
                     else:
-                        data_quantized, _ = quantizer.quantize_data(qkvw.data, quantize_bits, quantize_groups)
-                    qkvw.data.copy_(data_quantized)
-                    qkvw.data = qkvw.data.to(torch.int8)
+                        new_module = transformer_inference.DeepSpeedTransformerInference(
+                            transformer_config,
+                            mp_group=mp_group,
+                            #quantize_scales=quantization_scales[layer_id],
+                            quantize_groups=quantize_groups,
+                            merge_count=merge_count,
+                            mlp_extra_grouping=mlp_extra_grouping,
+                            qkv_merging=(policy_cls is HFBertLayerPolicy))
+
+                #if quantize and qkvw.dtype != torch.int8:
+                #    quantize_bits = 8
+                #    quantizer = WeightQuantization()
+                #    if policy_cls is HFBertLayerPolicy:
+                #        data_quantized, _ = quantizer.quantize_data(qkvw.data, quantize_bits, quantize_groups * 3)
+                #    else:
+                #        data_quantized, _ = quantizer.quantize_data(qkvw.data, quantize_bits, quantize_groups)
+                #    qkvw.data.copy_(data_quantized)
+                #    qkvw.data = qkvw.data.to(torch.int8)
             else:
 
                 if moe:
@@ -356,10 +398,15 @@ def replace_transformer_layer(orig_layer_impl,
                     )
 
                 else:
-                    new_module = transformer_inference.DeepSpeedTransformerInference(
-                        transformer_config,
-                        mp_group=mp_group,
-                    )
+                    if (policy_cls is HFBertLayerPolicy
+                            or policy_cls is HFDistilBertLayerPolicy):
+                        new_module = transformer_inference.DeepSpeedEncoder(
+                            transformer_config)
+                    else:
+                        new_module = transformer_inference.DeepSpeedTransformerInference(
+                            transformer_config,
+                            mp_group=mp_group,
+                        )
             new_module.config.scale_attention = scale_attention
 
             # we want the weights in [input, output] shape
@@ -457,6 +504,7 @@ def replace_transformer_layer(orig_layer_impl,
                 _res_4hh_w.data = transpose(_res_4hh_w.data)
                 _res_coef.data = transpose(_res_coef.data)
 
+            # TODO: post-rebase, need to add quantizer support for this block below
             if qkvw.is_meta or qkvw.numel() == 0 or qkvw.is_meta:
                 if qkvw.is_meta or qkvw.ds_tensor.numel() < attn_block.attn_qkvw.numel():
                     pass
@@ -532,22 +580,22 @@ def replace_transformer_layer(orig_layer_impl,
                                                  _4hh_w,
                                                  _4hh_b],
                                                 modifier_rank=0):
-                            mpl_block.inter_w = mp_replace.copy(
+                            mpl_block.inter_w = quantizer.quantize(mp_replace.copy(
                                 mpl_block.inter_w,
-                                _h4h_w)
+                                _h4h_w))
                             mpl_block.inter_b = mp_replace.copy(
                                 mpl_block.inter_b,
                                 _h4h_b)
-                            mpl_block.output_w = mp_replace.copy(
+                            mpl_block.output_w = quantizer.quantize(mp_replace.copy(
                                 mpl_block.output_w,
-                                _4hh_w)
+                                _4hh_w))
                             mpl_block.output_b = mp_replace.copy(
                                 mpl_block.output_b,
                                 _4hh_b)
                 else:
-                    mpl_block.inter_w = mp_replace.copy(mpl_block.inter_w, _h4h_w)
+                    mpl_block.inter_w = quantizer.quantize(mp_replace.copy(mpl_block.inter_w, _h4h_w))
                     mpl_block.inter_b = mp_replace.copy(mpl_block.inter_b, _h4h_b)
-                    mpl_block.output_w = mp_replace.copy(mpl_block.output_w, _4hh_w)
+                    mpl_block.output_w = quantizer.quantize(mp_replace.copy(mpl_block.output_w, _4hh_w))
                     mpl_block.output_b = mp_replace.copy(mpl_block.output_b, _4hh_b)
 
                 if attn_nw is None:
