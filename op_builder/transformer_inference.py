@@ -27,12 +27,8 @@ class InferenceBuilder(CUDAOpBuilder):
     def extra_ldflags(self):
         import deepspeed
         import os
-
-        lib_test_path = os.path.join(os.path.dirname(deepspeed.__file__), 'ops/libs/cutlass/test')
-
         lib_path = os.path.join(os.path.dirname(deepspeed.__file__), 'ops/libs/cutlass')
-        return ['-lcurand', f'-L{lib_test_path}', '-lgemm']
-        # return [f'-L{lib_path}', '-lgemmlib', '-lcurand', f'-L{lib_test_path}', '-lgemm']
+        return [f'-L{lib_path}', '-lgemmlib', '-lgemmi4', '-lcurand']
 
     def include_paths(self):
         return ['csrc/transformer/inference/includes']

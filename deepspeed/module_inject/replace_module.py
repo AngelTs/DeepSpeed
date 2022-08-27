@@ -483,10 +483,10 @@ def replace_transformer_layer(orig_layer_impl,
                 _res_coef.data = transpose(_res_coef.data)
 
             attn_block = new_module.attention
-            attn_block.attn_qkvw = quantizer.quantize(qkvw, count=-1)
+            attn_block.attn_qkvw = quantizer.quantize(qkvw, count=1)
             attn_block.attn_qkvb = mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
-            attn_block.attn_ow = quantizer.quantize(dense_w, count=1)
+            attn_block.attn_ow = quantizer.quantize(dense_w, count=-1)
             attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
 
             mpl_block = new_module.mlp
