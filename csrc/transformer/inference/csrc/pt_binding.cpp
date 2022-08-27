@@ -1633,19 +1633,11 @@ void TransformerEncoder(at::Tensor& input,
 
     int bsz_seq = bsz * _seq_length;
 
-    int bsz1 =
-        (bsz_seq >= 32 && bsz_seq < 128)
-            ? 128
-            : (bsz_seq % 128 == 0)
-                  ? bsz_seq
-                  : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
-                        ? ((bsz_seq % 64 == 0)
-                               ? bsz_seq
-                               : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
-                                     ? ((bsz_seq % 32 == 0) ? bsz_seq
-                                                            : bsz_seq + (32 - (bsz_seq % 32)))
-                                     : bsz_seq + (64 - (bsz_seq % 64)))
-                        : bsz_seq + (128 - (bsz_seq % 128));
+    // 128-aligned
+    int bsz1 = bsz_seq % 128 == 0 ? bsz_seq : (bsz_seq / 128 + 1) * 128;
+
+    // std::cout << "bsz: " << bsz << " bsz_seq: " << bsz_seq << " _seq_length: " << _seq_length << " bsz1: " << bsz1 << std::endl;
+
     auto aux_buff =
         (T*)Context::Instance().GetWorkSpace() + 8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
     auto aux_buff1 =
@@ -1666,6 +1658,7 @@ void TransformerEncoder(at::Tensor& input,
                           new_stream);
     if (q_int) {
         int out_size = attn_weights[0].size(0);
+        // std::cout << "attn_weights[0].size(0): " << out_size << "attn_weights[0].size(1)" << attn_weights[0].size(1) << std::endl;
         if (q_bits == 8) {
             launch_me((int8_t*)aux_buff,
                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
@@ -1686,7 +1679,8 @@ void TransformerEncoder(at::Tensor& input,
                     Context::Instance().GetCurrentStream());
         } else {
             assert (q_bits == 4);
-            launch_me_int4((int8_t*)aux_buff,
+            // std::cout << out_size << " " << input.size(2) << " " << q_scale3.size(0) << std::endl;
+            run_quantize_int4((int8_t*)aux_buff,
                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                     (__half*)(preln ? buf_0 : input_ptr),
                     input.size(2),
@@ -1799,7 +1793,7 @@ void TransformerEncoder(at::Tensor& input,
         buf_2, buf_0, bsz, num_heads, _seq_length, hidden_dim, new_stream, 1);
     if (q_int) {
         int out_size = attn_weights[1].size(0);
-        if (q_bits == 8) {
+        if (q_bits == 8 or q_bits == 4) {
             launch_me((int8_t*)aux_buff,
                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                     (__half*)buf_2,
@@ -1819,7 +1813,7 @@ void TransformerEncoder(at::Tensor& input,
                     new_stream);
         } else {
             assert (q_bits == 4);
-            launch_me_int4((int8_t*)aux_buff,
+            run_quantize_int4((int8_t*)aux_buff,
                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                     (__half*)buf_2,
                     input.size(2),
@@ -1863,7 +1857,7 @@ void TransformerEncoder(at::Tensor& input,
                                    new_stream);
     if (q_int) {
         int out_size = mlp_weights[0].size(0);
-        if (q_bits == 8) {
+        if (q_bits == 8 or q_bits == 4) {
             launch_me((int8_t*)aux_buff,
                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                     (__half*)buf_4,
@@ -1902,7 +1896,7 @@ void TransformerEncoder(at::Tensor& input,
                     new_stream);
         } else {
             assert (q_bits == 4);
-            launch_me_int4((int8_t*)aux_buff,
+            run_quantize_int4((int8_t*)aux_buff,
                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                     (__half*)buf_4,
                     input.size(2),

@@ -486,7 +486,7 @@ def replace_transformer_layer(orig_layer_impl,
             attn_block.attn_qkvw = quantizer.quantize(qkvw, count=-1)
             attn_block.attn_qkvb = mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
-            attn_block.attn_ow = quantizer.quantize(dense_w, count=-1)
+            attn_block.attn_ow = quantizer.quantize(dense_w, count=1)
             attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
 
             mpl_block = new_module.mlp
@@ -519,9 +519,9 @@ def replace_transformer_layer(orig_layer_impl,
                         torch.cuda.current_device())
                     new_module.res_coef.data = _res_coef.to(torch.cuda.current_device())
             else:
-                mpl_block.inter_w = quantizer.quantize(_h4h_w, count=-1)
+                mpl_block.inter_w = quantizer.quantize(_h4h_w, count=1)
                 mpl_block.inter_b.data = mp_replace.copy(mpl_block.inter_b, _h4h_b)
-                mpl_block.output_w = quantizer.quantize(_4hh_w, count=-1)
+                mpl_block.output_w = quantizer.quantize(_4hh_w, count=1)
                 mpl_block.output_b.data = mp_replace.copy(mpl_block.output_b, _4hh_b)
                 if attn_nw is None:
                     new_module.mlp.attn_nw = attn_nw

@@ -249,7 +249,7 @@ void launch_me(int8_t* output,
                int batch_size,
                cudaStream_t stream);
 
-void launch_me_int4(int8_t* output,
+void run_quantize_int4(int8_t* output,
                float* scales,
                __half* input,
                int intermediate_size,
