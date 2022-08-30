@@ -174,7 +174,6 @@ def replace_transformer_layer(orig_layer_impl,
                               mp_group=None,
                               ep_group=None,
                               expert_mp_group=None,
-                              preln=True,
                               fp16=True,
                               local_rank=-1,
                               stochastic_mode=True,
@@ -207,7 +206,6 @@ def replace_transformer_layer(orig_layer_impl,
         num_attention_heads (int): number of attention heads
         mp_size (int): model_parallelism degree
         mp_group : model_parallel group initialized on the modeling side
-        preln (bool): does the original layer implementation do pre or post layer norm?
         fp16 (bool): fp16 or fp32
         local_rank (int): GPU rank (optional),
         stochastic_mode (bool): whether to use stochastic mode
@@ -232,13 +230,8 @@ def replace_transformer_layer(orig_layer_impl,
                             policy_cls,
                             triangular_masking,
                             inference=False,
-                            preln=True,
                             layer_id=0):
-        preln = False if policy_cls is HFBertLayerPolicy or policy_cls is HFDistilBertLayerPolicy else preln
-        if policy_cls is HFBertLayerPolicy:
-            policy = policy_cls(child, inference=inference, preln=preln)
-        else:
-            policy = policy_cls(child, inference=inference)
+        policy = policy_cls(child, inference=inference)
 
         if inference:
             hidden_size, num_attention_heads = policy.get_hidden_heads()
