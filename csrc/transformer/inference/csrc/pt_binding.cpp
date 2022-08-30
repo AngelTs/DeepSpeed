@@ -126,8 +126,12 @@ void ds_softmax_internal(T* attn_scores,
                          int soft_len,
                          int heads)
 {
+    int mask_stride = 1;
+    if (attn_mask.sizes().size() > 2) mask_stride = attn_mask.size(2);
     launch_attn_softmax_v2((T*)attn_scores,
                            (attn_mask.sizes().size() > 1 ? (T*)attn_mask.data_ptr() : nullptr),
+                           (T*)nullptr,
+                           1.0,
                            triangular,
                            recompute,
                            local_attention,
@@ -136,6 +140,8 @@ void ds_softmax_internal(T* attn_scores,
                            heads,
                            seq_len,
                            soft_len,
+                           0,
+                           mask_stride,
                            1.0,
                            at::cuda::getCurrentCUDAStream());
 }
@@ -1949,8 +1955,12 @@ void TransformerEncoder(at::Tensor& input,
                                     bsz_heads,
                                     CUBLAS_GEMM_DEFAULT_TENSOR_OP);
         alpha = 1.0;
+        int mask_stride = 1;
+        if (input_mask.sizes().size() > 2) mask_stride = input_mask.size(2);
         launch_attn_softmax_v2(buf_3,
                                (T*)input_mask.data_ptr(),
+                               (T*)nullptr,
+                               1.0,
                                false,
                                true,
                                false,
@@ -1959,8 +1969,11 @@ void TransformerEncoder(at::Tensor& input,
                                num_heads,
                                _seq_length,
                                _seq_length,
+                               0, 
+                               mask_stride,
                                1.0,
                                new_stream);
+
         cublas_strided_batched_gemm(cub_handle,
                                     head_size,
                                     _seq_length,
