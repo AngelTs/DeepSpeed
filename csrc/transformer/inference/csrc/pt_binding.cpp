@@ -352,160 +352,159 @@ void attention_unfused(T* prev_key_cont,
                                 bsz * heads,
                                 CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
-template <typename T>
-std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
-                                           at::Tensor& attn_mask,
-                                           int rotary_dim,
-                                           bool rotate_half,
-                                           bool rotate_every_two,
-                                           int heads,
-                                           float norm_factor,
-                                           bool triangular,
-                                           bool local_attention,
-                                           int window_size,
-                                           bool no_masking,
-                                           unsigned layer_id,
-                                           unsigned num_layers)
-{
-    unsigned bsz = query_key_value.size(0);
-    unsigned seq_len = query_key_value.size(1);
-    unsigned hidden_dim = query_key_value.size(2) / 3;
+// template <typename T>
+// std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
+//                                            at::Tensor& attn_mask,
+//                                            int rotary_dim,
+//                                            bool rotate_half,
+//                                            bool rotate_every_two,
+//                                            int heads,
+//                                            float norm_factor,
+//                                            bool triangular,
+//                                            bool local_attention,
+//                                            int window_size,
+//                                            bool no_masking,
+//                                            unsigned layer_id,
+//                                            unsigned num_layers)
+// {
+//     unsigned bsz = query_key_value.size(0);
+//     unsigned seq_len = query_key_value.size(1);
+//     unsigned hidden_dim = query_key_value.size(2) / 3;
 
-    bool is_prompt = (seq_len > 1);
+//     bool is_prompt = (seq_len > 1);
 
-    if (is_prompt) Context::Instance().reset_tokens(seq_len);
-    unsigned soft_len = Context::Instance().current_tokens();
+//     if (is_prompt) Context::Instance().reset_tokens(seq_len);
+//     unsigned soft_len = Context::Instance().current_tokens();
 
-    int k = hidden_dim / heads;
-    auto options = at::TensorOptions()
-                       .dtype(query_key_value.options().dtype())
-                       .layout(at::kStrided)
-                       .device(at::kCUDA)
-                       .requires_grad(false);
+//     int k = hidden_dim / heads;
+//     auto options = at::TensorOptions()
+//                        .dtype(query_key_value.options().dtype())
+//                        .layout(at::kStrided)
+//                        .device(at::kCUDA)
+//                        .requires_grad(false);
 
-    T* workspace = (T*)Context::Instance().GetWorkSpace();
+//     T* workspace = (T*)Context::Instance().GetWorkSpace();
 
-    auto output = torch::from_blob(workspace, {bsz, seq_len, hidden_dim}, options);
+//     auto output = torch::from_blob(workspace, {bsz, seq_len, hidden_dim}, options);
 
-    auto query_cont = workspace;
-    size_t offset =
-        16 * (hidden_dim * bsz * MAX_OUT_TOKES) + layer_id * 2 * bsz * MAX_OUT_TOKES * hidden_dim;
+//     auto query_cont = workspace;
+//     size_t offset =
+//         16 * (hidden_dim * bsz * MAX_OUT_TOKES) + layer_id * 2 * bsz * MAX_OUT_TOKES * hidden_dim;
 
-    unsigned all_tokens = soft_len;
-    auto kv_cache = workspace + offset + (hidden_dim / heads) * (is_prompt ? 0 : soft_len - 1);
-    size_t value_offset = bsz * MAX_OUT_TOKES * hidden_dim;
+//     unsigned all_tokens = soft_len;
+//     auto kv_cache = workspace + offset + (hidden_dim / heads) * (is_prompt ? 0 : soft_len - 1);
+//     size_t value_offset = bsz * MAX_OUT_TOKES * hidden_dim;
 
-    T* temp_buf = (T*)output.data_ptr() + at::numel(output);
-    if (rotary_dim > 0 && rotate_half) {
-        launch_bias_add_transform_0213<T>((T*)query_cont,
-                                          kv_cache,
-                                          kv_cache + value_offset,
-                                          (T*)query_key_value.data_ptr(),
-                                          nullptr,
-                                          bsz,
-                                          seq_len,
-                                          (is_prompt ? 0 : soft_len - 1),
-                                          soft_len,
-                                          hidden_dim,
-                                          heads,
-                                          rotary_dim,
-                                          rotate_half,
-                                          rotate_every_two,
-                                          Context::Instance().GetCurrentStream(),
-                                          3);
-        launch_apply_rotary_pos_emb(query_cont,
-                                    kv_cache,
-                                    k,
-                                    seq_len,
-                                    rotary_dim,
-                                    (is_prompt ? 0 : soft_len - 1),
-                                    heads,
-                                    bsz,
-                                    rotate_half,
-                                    rotate_every_two,
-                                    Context::Instance().GetCurrentStream());
-        attention_unfused<T>(workspace + offset,
-                             (T*)query_cont,
-                             attn_mask,
-                             workspace + offset + value_offset,
-                             temp_buf,
-                             bsz,
-                             k,
-                             seq_len,
-                             all_tokens,
-                             heads,
-                             norm_factor,
-                             (triangular && is_prompt),
-                             is_prompt,
-                             local_attention,
-                             window_size);
-    } else if (seq_len >= 32 || (bsz * (hidden_dim / heads)) > 128) {
-        launch_bias_add_transform_0213<T>((T*)query_cont,
-                                          kv_cache,
-                                          kv_cache + value_offset,
-                                          (T*)query_key_value.data_ptr(),
-                                          nullptr,
-                                          bsz,
-                                          seq_len,
-                                          (is_prompt ? 0 : soft_len - 1),
-                                          soft_len,
-                                          hidden_dim,
-                                          heads,
-                                          rotary_dim,
-                                          rotate_half,
-                                          rotate_every_two,
-                                          Context::Instance().GetCurrentStream(),
-                                          3);
-        attention_unfused<T>(workspace + offset,
-                             (T*)query_cont,
-                             attn_mask,
-                             workspace + offset + value_offset,
-                             temp_buf,
-                             bsz,
-                             k,
-                             seq_len,
-                             all_tokens,
-                             heads,
-                             norm_factor,
-                             (triangular && is_prompt),
-                             is_prompt,
-                             local_attention,
-                             window_size);
-    } else {
-        launch_attn_softmax_context((T*)temp_buf,
-                                    (T*)query_key_value.data_ptr(),
-                                    (T*)(attn_mask.data_ptr()),
-                                    norm_factor,
-                                    (workspace + offset),
-                                    (workspace + offset + value_offset),
-                                    (T*)nullptr,
-                                    true,
-                                    (triangular && is_prompt),
-                                    is_prompt,  // recompute
-                                    bsz,
-                                    heads,
-                                    hidden_dim / heads,
-                                    (is_prompt ? soft_len : soft_len - 1),
-                                    seq_len,
-                                    all_tokens,
-                                    1.0,
-                                    at::cuda::getCurrentCUDAStream());
-    }
-    launch_transform4d_0213<T>((T*)output.data_ptr(),
-                               temp_buf,
-                               bsz,
-                               heads,
-                               seq_len,
-                               output.size(2),
-                               Context::Instance().GetCurrentStream(false),
-                               1);
+//     T* temp_buf = (T*)output.data_ptr() + at::numel(output);
+//     if (rotary_dim > 0 && rotate_half) {
+//         launch_bias_add_transform_0213<T>((T*)query_cont,
+//                                           kv_cache,
+//                                           kv_cache + value_offset,
+//                                           (T*)query_key_value.data_ptr(),
+//                                           nullptr,
+//                                           bsz,
+//                                           seq_len,
+//                                           (is_prompt ? 0 : soft_len - 1),
+//                                           soft_len,
+//                                           hidden_dim,
+//                                           heads,
+//                                           rotary_dim,
+//                                           rotate_half,
+//                                           rotate_every_two,
+//                                           Context::Instance().GetCurrentStream(),
+//                                           3);
+//         launch_apply_rotary_pos_emb(query_cont,
+//                                     kv_cache,
+//                                     k,
+//                                     seq_len,
+//                                     rotary_dim,
+//                                     (is_prompt ? 0 : soft_len - 1),
+//                                     heads,
+//                                     bsz,
+//                                     rotate_half,
+//                                     rotate_every_two,
+//                                     Context::Instance().GetCurrentStream());
+//         attention_unfused<T>(workspace + offset,
+//                              (T*)query_cont,
+//                              attn_mask,
+//                              workspace + offset + value_offset,
+//                              temp_buf,
+//                              bsz,
+//                              k,
+//                              seq_len,
+//                              all_tokens,
+//                              heads,
+//                              norm_factor,
+//                              (triangular && is_prompt),
+//                              is_prompt,
+//                              local_attention,
+//                              window_size);
+//     } else if (seq_len >= 32 || (bsz * (hidden_dim / heads)) > 128) {
+//         launch_bias_add_transform_0213<T>((T*)query_cont,
+//                                           kv_cache,
+//                                           kv_cache + value_offset,
+//                                           (T*)query_key_value.data_ptr(),
+//                                           nullptr,
+//                                           bsz,
+//                                           seq_len,
+//                                           (is_prompt ? 0 : soft_len - 1),
+//                                           soft_len,
+//                                           hidden_dim,
+//                                           heads,
+//                                           rotary_dim,
+//                                           rotate_half,
+//                                           rotate_every_two,
+//                                           Context::Instance().GetCurrentStream(),
+//                                           3);
+//         attention_unfused<T>(workspace + offset,
+//                              (T*)query_cont,
+//                              attn_mask,
+//                              workspace + offset + value_offset,
+//                              temp_buf,
+//                              bsz,
+//                              k,
+//                              seq_len,
+//                              all_tokens,
+//                              heads,
+//                              norm_factor,
+//                              (triangular && is_prompt),
+//                              is_prompt,
+//                              local_attention,
+//                              window_size);
+//     } else {
+//         launch_attn_softmax_context((T*)temp_buf,
+//                                     (T*)query_key_value.data_ptr(),
+//                                     (T*)(attn_mask.data_ptr()),
+//                                     norm_factor,
+//                                     (workspace + offset),
+//                                     (workspace + offset + value_offset),
+//                                     (T*)nullptr,
+//                                     true,
+//                                     (triangular && is_prompt),
+//                                     is_prompt,  // recompute
+//                                     bsz,
+//                                     heads,
+//                                     hidden_dim / heads,
+//                                     (is_prompt ? soft_len : soft_len - 1),
+//                                     seq_len,
+//                                     all_tokens,
+//                                     1.0,
+//                                     at::cuda::getCurrentCUDAStream());
+//     }
+//     launch_transform4d_0213<T>((T*)output.data_ptr(),
+//                                temp_buf,
+//                                bsz,
+//                                heads,
+//                                seq_len,
+//                                output.size(2),
+//                                Context::Instance().GetCurrentStream(false),
+//                                1);
 
-    if (layer_id == num_layers - 1) Context::Instance().advance_tokens();
-    auto prev_key = torch::from_blob(workspace + offset, {bsz, all_tokens, hidden_dim}, options);
-    auto prev_value =
-        torch::from_blob(workspace + offset + value_offset, {bsz, all_tokens, hidden_dim}, options);
-    return {output, prev_key, prev_value};
-}
+//     if (layer_id == num_layers - 1) Context::Instance().advance_tokens();
+//     auto prev_key = torch::from_blob(workspace + offset, {bsz, all_tokens, hidden_dim}, options);
+//     auto prev_value = torch::from_blob(workspace + offset + value_offset, {bsz, all_tokens, hidden_dim}, options);
+//     return {output, prev_key, prev_value};
+// }
 
 template <typename T>
 void ds_softmax_internal(T* attn_scores,
@@ -723,8 +722,7 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
 
     if (layer_id == num_layers - 1) Context::Instance().advance_tokens();
     auto prev_key = torch::from_blob(workspace + offset, {bsz, heads, all_tokens, k}, options);
-    auto prev_value =
-        torch::from_blob(workspace + offset + value_offset, {bsz, heads, all_tokens, k}, options);
+    auto prev_value = torch::from_blob(workspace + offset + value_offset, {bsz, heads, all_tokens, k}, options);
     return {output, prev_key, prev_value};
 }
 
