@@ -1332,14 +1332,14 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
                  bsz1,
                  q_scale1.size(0),
                  Context::Instance().GetCurrentStream());
-        launch_bias_gelu_int4((int8_t*)auxilary_buf,
+        launch_bias_gelu_int8((int8_t*)auxilary_buf,
                               (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
                               (__half*)workspace,
                               (__half*)bias.data_ptr(),
                               out_size,
                               bsz,
                               Context::Instance().GetCurrentStream());
-        run_gemm_int4(auxilary_buf,
+        run_gemm(auxilary_buf,
                       weight_out.data_ptr(),
                       (T*)output.data_ptr(),
                       (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
@@ -1637,13 +1637,13 @@ void TransformerEncoder(at::Tensor& input,
     // 128-aligned
     int bsz1 = bsz_seq % 128 == 0 ? bsz_seq : (bsz_seq / 128 + 1) * 128;
 
-    // std::cout << "bsz: " << bsz << " bsz_seq: " << bsz_seq << " _seq_length: " << _seq_length <<
-    // " bsz1: " << bsz1 << std::endl;
-
     auto aux_buff =
         (T*)Context::Instance().GetWorkSpace() + 8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
     auto aux_buff1 =
         (T*)Context::Instance().GetWorkSpace() + 12 * input.size(0) * MAX_OUT_TOKES * input.size(2);
+
+    auto aux_bufff =
+        (T*)Context::Instance().GetWorkSpace() + 16 * input.size(0) * MAX_OUT_TOKES * input.size(2);
 
     T* input_ptr = (T*)input.data_ptr();
     float alpha = (T)1.0;
@@ -1659,16 +1659,33 @@ void TransformerEncoder(at::Tensor& input,
                           hidden_dim,
                           new_stream);
     if (q_int) {
+        auto options = at::TensorOptions()
+                            .dtype(input.options().dtype())
+                            .layout(input.options().layout())
+                            .device(input.options().device())
+                            .requires_grad(false);
+        // torch::Tensor a = 0.5 * torch::ones({1, 11, 1024}, input.options());
+        // input_ptr = (T*)a.data_ptr();
+        // torch::Tensor b = 119 * torch::ones({attn_weights[0].size(0), attn_weights[0].size(1)/2}, attn_weights[0].options());
+        // T *b_ptr = (T*)b.data_ptr();
+        // torch::Tensor b_scale = 0.125 * torch::ones({q_scale3.size(0)}, attn_weights[0].options());
+        // T *b_scale_ptr = (T*)b_scale.data_ptr();
+
+
+        // std::cout << "attn_weights[0][0] = " << attn_weights[0][0] << ", q_scale[0] = " << q_scale3[0] << std::endl;
+        c10::Half temp[10];
+        cudaMemcpy(temp, (c10::Half*)(input_ptr), sizeof(c10::Half) * 10, cudaMemcpyDeviceToHost);
+        std::cout <<"input[0] = " << ((c10::Half*)(temp))[0] << std::endl;
+
         int out_size = attn_weights[0].size(0);
-        // std::cout << "attn_weights[0].size(0): " << out_size << "attn_weights[0].size(1)" <<
-        // attn_weights[0].size(1) << std::endl;
-        if (q_bits == 8 or q_bits == 4) {
+        if (q_bits == 8) {
             launch_me((int8_t*)aux_buff,
                       (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                       (__half*)(preln ? buf_0 : input_ptr),
                       input.size(2),
                       bsz_seq,
                       Context::Instance().GetCurrentStream());
+
             run_gemm(aux_buff,
                      attn_weights[0].data_ptr(),
                      buf_1,
@@ -1680,16 +1697,25 @@ void TransformerEncoder(at::Tensor& input,
                      bsz1,
                      q_scale3.size(0),
                      Context::Instance().GetCurrentStream());
+
+            // c10::Half buf_11[10];
+            // cudaMemcpy(buf_11, buf_1, sizeof(c10::Half) * 10, cudaMemcpyDeviceToHost);
+            // std::cout << "after int4, buf_1 = " << ((c10::Half*)(buf_11))[0] << std::endl;
         } else {
             assert(q_bits == 4);
-            // std::cout << out_size << " " << input.size(2) << " " << q_scale3.size(0) <<
-            // std::endl;
+
             run_quantize_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                               (__half*)(preln ? buf_0 : input_ptr),
                               input.size(2),
                               bsz_seq,
                               Context::Instance().GetCurrentStream());
+
+            int8_t aux_bufff[10];
+            float scale[1];
+            cudaMemcpy(aux_bufff, aux_buff, sizeof(int8_t) * 10, cudaMemcpyDeviceToHost);
+            cudaMemcpy(scale, (float*)((int8_t*)aux_buff + bsz1 * input.size(2)), sizeof(float), cudaMemcpyDeviceToHost);
+
             run_gemm_int4(aux_buff,
                           attn_weights[0].data_ptr(),
                           buf_1,
@@ -1701,6 +1727,21 @@ void TransformerEncoder(at::Tensor& input,
                           bsz1,
                           q_scale3.size(0),
                           Context::Instance().GetCurrentStream());
+
+            // run_gemm_int4(aux_buff,
+            //               b.data_ptr(),
+            //               buf_1,
+            //               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+            //               b_scale.data_ptr(),
+            //               bsz1,
+            //               out_size,
+            //               input.size(2),
+            //               bsz1,
+            //               b_scale.size(0),
+            //               Context::Instance().GetCurrentStream());
+            // c10::Half buf_11[10];
+            // cudaMemcpy(buf_11, buf_1, sizeof(c10::Half) * 10, cudaMemcpyDeviceToHost);
+            // std::cout << "after int4, buf_1 = " << ((c10::Half*)(buf_11))[0] << std::endl;
         }
     } else {
         cublas_gemm_ex(cub_handle,
@@ -1816,7 +1857,6 @@ void TransformerEncoder(at::Tensor& input,
                      q_scale2.size(0),
                      new_stream);
         } else {
-            std::cout << "attn_o using int4" << std::endl;
             assert(q_bits == 4);
             run_quantize_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
@@ -1862,8 +1902,6 @@ void TransformerEncoder(at::Tensor& input,
                                    new_stream);
     if (q_int) {
         int out_size = mlp_weights[0].size(0);
-        std::cout << " in mlp.inter, out_size = " << out_size << ", input.size(2) = " << input.size(2)
-                  << ", bsz1 = " << bsz1 << std::endl;
         if (q_bits == 8) {
             launch_me((int8_t*)aux_buff,
                       (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
@@ -1871,7 +1909,7 @@ void TransformerEncoder(at::Tensor& input,
                       input.size(2),
                       bsz_seq,
                       new_stream);
-            std::cout << " in mlp.inter after quantize(), aux_buff = " << aux_buff[0] << std::endl;
+
             run_gemm(aux_buff,
                      mlp_weights[0].data_ptr(),
                      aux_buff1,
@@ -1903,14 +1941,12 @@ void TransformerEncoder(at::Tensor& input,
                      new_stream);
         } else {
             assert(q_bits == 4);
-            std::cout << "mlp.inter using int4" << std::endl;
             run_quantize_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                               (__half*)buf_4,
                               input.size(2),
                               bsz_seq,
                               new_stream);
-            std::cout << " in mlp.inter after quantize(), aux_buff = " << aux_buff[0] << std::endl;
 
             run_gemm_int4(aux_buff,
                           mlp_weights[0].data_ptr(),
@@ -1923,14 +1959,14 @@ void TransformerEncoder(at::Tensor& input,
                           bsz1,
                           q_scale1.size(0),
                           new_stream);
-            launch_bias_gelu_int8((int8_t*)aux_buff,
+            launch_bias_gelu_int4((int8_t*)aux_buff,
                                   (float*)((int8_t*)aux_buff + bsz1 * out_size),
                                   (__half*)aux_buff1,
                                   (__half*)mlp_biases[0].data_ptr(),
                                   out_size,
                                   bsz_seq,
                                   Context::Instance().GetCurrentStream());
-            run_gemm(aux_buff,
+            run_gemm_int4(aux_buff,
                      mlp_weights[1].data_ptr(),
                      (T*)buf_5,
                      (float*)((int8_t*)aux_buff + bsz1 * out_size),

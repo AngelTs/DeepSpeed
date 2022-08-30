@@ -713,6 +713,57 @@ void run_quantize_int4(int8_t* output, float* scales, __half* input, int K,
       output, scales, input, total_count, K / granularity);
 }
 
+__global__ void fused_bias_gelu_int4(int8_t* output,
+                                     float* scales,
+                                     __half* input,
+                                     const __half* bias,
+                                     int total_count,
+                                     int intermediate_size)
+{
+#if __CUDA_ARCH__ >= 700
+
+    float2* input_cast = reinterpret_cast<float2*>(input);
+    const float2* bias_cast = reinterpret_cast<const float2*>(bias);
+
+    int offset = blockIdx.x * intermediate_size;
+    int id = threadIdx.x;
+    float2 vals_vec[8];
+    unsigned cnt = 0;
+    while (id < intermediate_size) {
+        vals_vec[cnt] = input_cast[offset + id];
+        float2 bias_vec = bias_cast[id];
+
+        __half2* vals_half = reinterpret_cast<__half2*>(vals_vec + cnt);
+
+        float2 low_data = __half22float2(vals_half[0]);
+        float2 high_data = __half22float2(vals_half[1]);
+
+        __half2* bias_half = reinterpret_cast<__half2*>(&bias_vec);
+
+        float2 low_bias = __half22float2(bias_half[0]);
+        float2 high_bias = __half22float2(bias_half[1]);
+
+        low_data.x += low_bias.x;
+        low_data.y += low_bias.y;
+        high_data.x += high_bias.x;
+        high_data.y += high_bias.y;
+
+        low_data.x = gelu(low_data.x);
+        low_data.y = gelu(low_data.y);
+        high_data.x = gelu(high_data.x);
+        high_data.y = gelu(high_data.y);
+
+        vals_half[0] = __float22half2_rn(low_data);
+        vals_half[1] = __float22half2_rn(high_data);
+
+        // input_cast[offset + id] = vals_vec;
+        id += blockDim.x;
+        cnt++;
+    }
+    quantize_int4_kernel(vals_vec, cnt, output, scales, intermediate_size);
+#endif
+}
+
 __global__ void fused_bias_gelu_int8(int8_t* output,
                                      float* scales,
                                      __half* input,
@@ -764,56 +815,6 @@ __global__ void fused_bias_gelu_int8(int8_t* output,
 #endif
 }
 
-__global__ void fused_bias_gelu_int4(int8_t* output,
-                                     float* scales,
-                                     __half* input,
-                                     const __half* bias,
-                                     int total_count,
-                                     int intermediate_size)
-{
-#if __CUDA_ARCH__ >= 700
-
-    float2* input_cast = reinterpret_cast<float2*>(input);
-    const float2* bias_cast = reinterpret_cast<const float2*>(bias);
-
-    int offset = blockIdx.x * intermediate_size;
-    int id = threadIdx.x;
-    float2 vals_vec[8];
-    unsigned cnt = 0;
-    while (id < intermediate_size) {
-        vals_vec[cnt] = input_cast[offset + id];
-        float2 bias_vec = bias_cast[id];
-
-        __half2* vals_half = reinterpret_cast<__half2*>(vals_vec + cnt);
-
-        float2 low_data = __half22float2(vals_half[0]);
-        float2 high_data = __half22float2(vals_half[1]);
-
-        __half2* bias_half = reinterpret_cast<__half2*>(&bias_vec);
-
-        float2 low_bias = __half22float2(bias_half[0]);
-        float2 high_bias = __half22float2(bias_half[1]);
-
-        low_data.x += low_bias.x;
-        low_data.y += low_bias.y;
-        high_data.x += high_bias.x;
-        high_data.y += high_bias.y;
-
-        low_data.x = gelu(low_data.x);
-        low_data.y = gelu(low_data.y);
-        high_data.x = gelu(high_data.x);
-        high_data.y = gelu(high_data.y);
-
-        vals_half[0] = __float22half2_rn(low_data);
-        vals_half[1] = __float22half2_rn(high_data);
-
-        // input_cast[offset + id] = vals_vec;
-        id += blockDim.x;
-        cnt++;
-    }
-    quantize_int4_kernel(vals_vec, cnt, output, scales, intermediate_size);
-#endif
-}
 __global__ void quantize_int8(int8_t* output,
                               float* scales,
                               __half* input,
@@ -844,7 +845,7 @@ void launch_bias_gelu_int4(int8_t* output,
                            cudaStream_t stream)
 {
     int total_count = batch_size * (intermediate_size / 4);
-    int threads = 1024;  // intermediate_size / iterations / 4;
+    int threads = 1024;
     dim3 block_dims(threads);
     dim3 grid_dims(batch_size);  // (batch_size);
 
