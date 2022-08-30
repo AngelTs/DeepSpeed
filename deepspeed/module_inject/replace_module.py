@@ -175,6 +175,7 @@ def replace_transformer_layer(orig_layer_impl,
                               mp_group=None,
                               ep_group=None,
                               expert_mp_group=None,
+                              preln=True,
                               fp16=True,
                               local_rank=-1,
                               stochastic_mode=True,
@@ -232,6 +233,7 @@ def replace_transformer_layer(orig_layer_impl,
                             policy_cls,
                             triangular_masking,
                             inference=False,
+                            preln=True,
                             layer_id=0):
         preln = False if policy_cls is HFBertLayerPolicy or policy_cls is HFDistilBertLayerPolicy else preln
         if policy_cls is HFBertLayerPolicy:
@@ -580,22 +582,26 @@ def replace_transformer_layer(orig_layer_impl,
                                                  _4hh_w,
                                                  _4hh_b],
                                                 modifier_rank=0):
-                            mpl_block.inter_w = quantizer.quantize(mp_replace.copy(
-                                mpl_block.inter_w,
-                                _h4h_w))
+                            mpl_block.inter_w = quantizer.quantize(
+                                mp_replace.copy(mpl_block.inter_w,
+                                                _h4h_w))
                             mpl_block.inter_b = mp_replace.copy(
                                 mpl_block.inter_b,
                                 _h4h_b)
-                            mpl_block.output_w = quantizer.quantize(mp_replace.copy(
-                                mpl_block.output_w,
-                                _4hh_w))
+                            mpl_block.output_w = quantizer.quantize(
+                                mp_replace.copy(mpl_block.output_w,
+                                                _4hh_w))
                             mpl_block.output_b = mp_replace.copy(
                                 mpl_block.output_b,
                                 _4hh_b)
                 else:
-                    mpl_block.inter_w = quantizer.quantize(mp_replace.copy(mpl_block.inter_w, _h4h_w))
+                    mpl_block.inter_w = quantizer.quantize(
+                        mp_replace.copy(mpl_block.inter_w,
+                                        _h4h_w))
                     mpl_block.inter_b = mp_replace.copy(mpl_block.inter_b, _h4h_b)
-                    mpl_block.output_w = quantizer.quantize(mp_replace.copy(mpl_block.output_w, _4hh_w))
+                    mpl_block.output_w = quantizer.quantize(
+                        mp_replace.copy(mpl_block.output_w,
+                                        _4hh_w))
                     mpl_block.output_b = mp_replace.copy(mpl_block.output_b, _4hh_b)
 
                 if attn_nw is None:

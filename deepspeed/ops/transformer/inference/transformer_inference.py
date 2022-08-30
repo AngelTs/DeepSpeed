@@ -292,7 +292,7 @@ class DeepSpeedSelfAttentionFunction(Function):
             head_size = (qkv_out.shape[-1] // 3 // num_attention_heads_per_partition)
             if config.bigscience_bloom:
                 context_layer, presents = backup_attention(qkv_out, layer_past, alibi, input_mask, norm_factor)
-                return context_layer, presents[0], presents[1] #key_layer, value_layer
+                return context_layer, presents[0], presents[1]  #key_layer, value_layer
             else:
                 if alibi is not None:
                     batch_heads = qkv_out.shape[0] * num_attention_heads_per_partition
@@ -327,16 +327,18 @@ class DeepSpeedSelfAttentionFunction(Function):
                                       attn_qkvb,
                                       config.enable_qkv_quantization)
             else:
-                qkv_out = qkv_func(input,
-                                   attn_qkvw,
-                                   attn_qkvw.scale,
-                                   (attn_qkvb if attn_qkvb is not None else norm_b),
-                                   norm_w,
-                                   norm_b,
-                                   config.epsilon,
-                                   (attn_qkvb is not None),
-                                   1 if config.bigscience_bloom else DeepSpeedTransformerInference.layer_id,
-                                   config.enable_qkv_quantization)
+                qkv_out = qkv_func(
+                    input,
+                    attn_qkvw,
+                    attn_qkvw.scale,
+                    (attn_qkvb if attn_qkvb is not None else norm_b),
+                    norm_w,
+                    norm_b,
+                    config.epsilon,
+                    (attn_qkvb is not None),
+                    1 if config.bigscience_bloom else
+                    DeepSpeedTransformerInference.layer_id,
+                    config.enable_qkv_quantization)
 
             context_layer, key_layer, value_layer = compute_attention(qkv_out[0] if isinstance(qkv_out, list) else qkv_out, input_mask)
 
@@ -690,26 +692,27 @@ class DeepSpeedTransformerInference(nn.Module):
                         device=device))
         self.layer_past = None
 
-    def forward(self,
-                input,
-                input_mask=None,
-                attention_mask=None,
-                head_mask=None,
-                layer_past=None,
-                get_key_value=False,
-                get_present=False,
-                encoder_output=None,
-                enc_dec_attn_mask=None,
-                encoder_hidden_states=None,
-                encoder_attention_mask=None,
-                use_cache=False,
-                output_attentions=False,
-                timing=[],
-                alibi=None,
-                # TODO(arashb): 'layer_head_mask' and 'past_key_value' are only added to satisfy the OPT models API.
-                # This needs to be redesigned later!
-                layer_head_mask=None,
-                past_key_value=None):
+    def forward(
+            self,
+            input,
+            input_mask=None,
+            attention_mask=None,
+            head_mask=None,
+            layer_past=None,
+            get_key_value=False,
+            get_present=False,
+            encoder_output=None,
+            enc_dec_attn_mask=None,
+            encoder_hidden_states=None,
+            encoder_attention_mask=None,
+            use_cache=False,
+            output_attentions=False,
+            timing=[],
+            alibi=None,
+            # TODO(arashb): 'layer_head_mask' and 'past_key_value' are only added to satisfy the OPT models API.
+            # This needs to be redesigned later!
+            layer_head_mask=None,
+            past_key_value=None):
         get_present = (get_present or get_key_value or use_cache)
         input_mask = input_mask if attention_mask is None else attention_mask
 

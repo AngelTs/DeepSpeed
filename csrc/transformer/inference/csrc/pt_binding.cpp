@@ -140,7 +140,6 @@ void ds_softmax_internal(T* attn_scores,
                            at::cuda::getCurrentCUDAStream());
 }
 
-/*
 template <typename T>
 void attention_unfused(at::Tensor& prev_key_cont,
                        at::Tensor& query_cont,
@@ -280,7 +279,6 @@ std::vector<at::Tensor> ds_softmax_context1(at::Tensor& query,
 
     return {output, prev_key, prev_value};
 }
-*/
 
 template <typename T>
 void attention_unfused(T* prev_key_cont,
@@ -828,17 +826,14 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
     if (q_int8) {
         int out_size = weight.size(0);
 
-        int bsz1 = (bsz >= 32 && bsz < 128)
-                       ? 128
-                       : (bsz % 128 == 0)
-                             ? bsz
-                             : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                                   ? ((bsz % 64 == 0)
-                                          ? bsz
-                                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                : bsz + (64 - (bsz % 64)))
-                                   : bsz + (128 - (bsz % 128));
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+                   : (bsz % 128 == 0)       ? bsz
+                   : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                       ? ((bsz % 64 == 0) ? bsz
+                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                              ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                              : bsz + (64 - (bsz % 64)))
+                       : bsz + (128 - (bsz % 128));
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
 
@@ -1021,8 +1016,9 @@ at::Tensor ds_qkv_gemm_int8(at::Tensor& input,
     return output;
 }
 
-// TODO: Reza check workspace differences between specialized and public, the 
-// public version was allocating the workspace w.r.t. #layers but we're not doing that in specialized
+// TODO: Reza check workspace differences between specialized and public, the
+// public version was allocating the workspace w.r.t. #layers but we're not doing that in
+// specialized
 template <typename T>
 at::Tensor ds_linear_layer(at::Tensor& input,
                            at::Tensor& weight,
@@ -1041,17 +1037,14 @@ at::Tensor ds_linear_layer(at::Tensor& input,
     if (q_int8) {
         int out_size = weight.size(0);
 
-        int bsz1 = (bsz >= 32 && bsz < 128)
-                       ? 128
-                       : (bsz % 128 == 0)
-                             ? bsz
-                             : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                                   ? ((bsz % 64 == 0)
-                                          ? bsz
-                                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                : bsz + (64 - (bsz % 64)))
-                                   : bsz + (128 - (bsz % 128));
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+                   : (bsz % 128 == 0)       ? bsz
+                   : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                       ? ((bsz % 64 == 0) ? bsz
+                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                              ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                              : bsz + (64 - (bsz % 64)))
+                       : bsz + (128 - (bsz % 128));
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
 
@@ -1157,17 +1150,14 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
     if (q_int8) {
         int out_size = weight.size(0);
 
-        int bsz1 = (bsz >= 32 && bsz < 128)
-                       ? 128
-                       : (bsz % 128 == 0)
-                             ? bsz
-                             : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                                   ? ((bsz % 64 == 0)
-                                          ? bsz
-                                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                : bsz + (64 - (bsz % 64)))
-                                   : bsz + (128 - (bsz % 128));
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+                   : (bsz % 128 == 0)       ? bsz
+                   : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                       ? ((bsz % 64 == 0) ? bsz
+                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                              ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                              : bsz + (64 - (bsz % 64)))
+                       : bsz + (128 - (bsz % 128));
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
 
@@ -1264,7 +1254,7 @@ void mlp_unfused_cublas(T* output,
                         at::Tensor& q_scale,
                         at::Tensor& q_scale1,
                         bool q_int8,
-                        int act_func_type)
+                        ActivationFuncType act_func_type)
 {
     int bsz = input.size(0) * input.size(1);
     T* workspace = (T*)Context::Instance().GetWorkSpace() + 4 * at::numel(input);
@@ -1284,17 +1274,14 @@ void mlp_unfused_cublas(T* output,
                                Context::Instance().GetCurrentStream());
     if (q_int8) {
         int out_size = weight.size(0);
-        int bsz1 = (bsz >= 32 && bsz < 128)
-                       ? 128
-                       : (bsz % 128 == 0)
-                             ? bsz
-                             : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                                   ? ((bsz % 64 == 0)
-                                          ? bsz
-                                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                : bsz + (64 - (bsz % 64)))
-                                   : bsz + (128 - (bsz % 128));
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+                   : (bsz % 128 == 0)       ? bsz
+                   : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                       ? ((bsz % 64 == 0) ? bsz
+                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                              ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                              : bsz + (64 - (bsz % 64)))
+                       : bsz + (128 - (bsz % 128));
         auto auxilary_buf = (T*)Context::Instance().GetWorkSpace() +
                             8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
         // int8_t* norm_out = (int8_t*)workspace;
@@ -1339,7 +1326,7 @@ void mlp_unfused_cublas(T* output,
                  bsz1,
                  q_scale1.size(0),
                  Context::Instance().GetCurrentStream());
-        //TODO: Reza add support for act_func_type of ReLU here
+        // TODO: Reza add support for act_func_type of ReLU here
         launch_bias_gelu_int8((int8_t*)auxilary_buf,
                               (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
                               (__half*)output,
@@ -1383,16 +1370,16 @@ void mlp_unfused_cublas(T* output,
 #endif
             if (act_func_type == ActivationFuncType::GELU) {
                 launch_bias_gelu((T*)output,
-                                (T*)bias.data_ptr(),
-                                weight.size(1),
-                                bsz,
-                                Context::Instance().GetCurrentStream());
+                                 (T*)bias.data_ptr(),
+                                 weight.size(1),
+                                 bsz,
+                                 Context::Instance().GetCurrentStream());
             } else if (act_func_type == ActivationFuncType::ReLU) {
                 launch_bias_relu((T*)output,
-                                (T*)bias.data_ptr(),
-                                weight.size(1),
-                                bsz,
-                                Context::Instance().GetCurrentStream());
+                                 (T*)bias.data_ptr(),
+                                 weight.size(1),
+                                 bsz,
+                                 Context::Instance().GetCurrentStream());
             }
             cublas_gemm_ex(Context::Instance().GetCublasHandle(),
                            CUBLAS_OP_N,
@@ -1561,17 +1548,14 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
     int bsz = input.size(0) * input.size(1);
     if (q_int8) {
         int out_size = weight.size(0);
-        int bsz1 = (bsz >= 32 && bsz < 128)
-                       ? 128
-                       : (bsz % 128 == 0)
-                             ? bsz
-                             : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                                   ? ((bsz % 64 == 0)
-                                          ? bsz
-                                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                : bsz + (64 - (bsz % 64)))
-                                   : bsz + (128 - (bsz % 128));
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+                   : (bsz % 128 == 0)       ? bsz
+                   : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                       ? ((bsz % 64 == 0) ? bsz
+                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                              ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                              : bsz + (64 - (bsz % 64)))
+                       : bsz + (128 - (bsz % 128));
         auto auxilary_buf = workspace + 8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
         launch_me((int8_t*)auxilary_buf,
                   (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
@@ -1677,7 +1661,7 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
     return output;
 }
 
-//TODO: Reza needs to check API definition of transformer inference side
+// TODO: Reza needs to check API definition of transformer inference side
 void residual_add_bias(at::Tensor& output,
                        at::Tensor& input,
                        at::Tensor& attention_output,
@@ -1879,19 +1863,14 @@ void TransformerEncoder(at::Tensor& input,
 
     int bsz_seq = bsz * _seq_length;
 
-    int bsz1 =
-        (bsz_seq >= 32 && bsz_seq < 128)
-            ? 128
-            : (bsz_seq % 128 == 0)
-                  ? bsz_seq
-                  : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
-                        ? ((bsz_seq % 64 == 0)
-                               ? bsz_seq
-                               : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
-                                     ? ((bsz_seq % 32 == 0) ? bsz_seq
-                                                            : bsz_seq + (32 - (bsz_seq % 32)))
-                                     : bsz_seq + (64 - (bsz_seq % 64)))
-                        : bsz_seq + (128 - (bsz_seq % 128));
+    int bsz1 = (bsz_seq >= 32 && bsz_seq < 128) ? 128
+               : (bsz_seq % 128 == 0)           ? bsz_seq
+               : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
+                   ? ((bsz_seq % 64 == 0) ? bsz_seq
+                      : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
+                          ? ((bsz_seq % 32 == 0) ? bsz_seq : bsz_seq + (32 - (bsz_seq % 32)))
+                          : bsz_seq + (64 - (bsz_seq % 64)))
+                   : bsz_seq + (128 - (bsz_seq % 128));
     auto aux_buff =
         (T*)Context::Instance().GetWorkSpace() + 8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
 

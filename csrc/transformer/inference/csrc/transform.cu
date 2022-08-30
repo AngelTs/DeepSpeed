@@ -4,7 +4,6 @@
 #include "custom_cuda_layers.h"
 namespace cg = cooperative_groups;
 
-
 __global__ void transform_scale(float* query,
                                 float* kv_cache,
                                 const float* vals,
@@ -210,7 +209,8 @@ void launch_transform_scale<__half>(__half* vals,
 }
 
 // Bias add
-// TODO: Reza fix this up after rebase, sync definition w. public master that includes k/v cache, etc.
+// TODO: Reza fix this up after rebase, sync definition w. public master that includes k/v cache,
+// etc.
 __global__ void bias_add_transform_0213(float* output,
                                         const float* vals,
                                         const float* bias,
