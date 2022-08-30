@@ -23,8 +23,6 @@ op_module = load(name='bg',
                  ],
                  verbose=True)
 
-import deepspeed
-
 from deepspeed.ops import op_builder
 
 q_module = op_builder.QuantizerBuilder().load()

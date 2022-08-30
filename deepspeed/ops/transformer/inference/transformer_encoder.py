@@ -1,21 +1,15 @@
 '''
 Copyright 2020 The Microsoft DeepSpeed Team
 '''
-import json
-import math
-import importlib
 import torch
 from torch import nn
 from torch.autograd import Function
-import time
 from ... import op_builder
-import torch.nn as nn
-import torch.distributed as dist
 
 # Cuda modules will be imported if needed
 inference_cuda_module = None
 
-from .transformer_inference import DeepSpeedInferenceConfig, DeepSpeedSelfAttention, DeepSpeedMLP
+from .transformer_inference import DeepSpeedSelfAttention, DeepSpeedMLP
 
 
 class DeepSpeedEncoderFunction(Function):

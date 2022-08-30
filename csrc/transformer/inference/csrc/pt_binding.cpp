@@ -389,7 +389,8 @@ void attention_unfused(T* prev_key_cont,
 
 //     auto query_cont = workspace;
 //     size_t offset =
-//         16 * (hidden_dim * bsz * MAX_OUT_TOKES) + layer_id * 2 * bsz * MAX_OUT_TOKES * hidden_dim;
+//         16 * (hidden_dim * bsz * MAX_OUT_TOKES) + layer_id * 2 * bsz * MAX_OUT_TOKES *
+//         hidden_dim;
 
 //     unsigned all_tokens = soft_len;
 //     auto kv_cache = workspace + offset + (hidden_dim / heads) * (is_prompt ? 0 : soft_len - 1);
@@ -502,8 +503,8 @@ void attention_unfused(T* prev_key_cont,
 
 //     if (layer_id == num_layers - 1) Context::Instance().advance_tokens();
 //     auto prev_key = torch::from_blob(workspace + offset, {bsz, all_tokens, hidden_dim}, options);
-//     auto prev_value = torch::from_blob(workspace + offset + value_offset, {bsz, all_tokens, hidden_dim}, options);
-//     return {output, prev_key, prev_value};
+//     auto prev_value = torch::from_blob(workspace + offset + value_offset, {bsz, all_tokens,
+//     hidden_dim}, options); return {output, prev_key, prev_value};
 // }
 
 template <typename T>
@@ -722,7 +723,8 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
 
     if (layer_id == num_layers - 1) Context::Instance().advance_tokens();
     auto prev_key = torch::from_blob(workspace + offset, {bsz, heads, all_tokens, k}, options);
-    auto prev_value = torch::from_blob(workspace + offset + value_offset, {bsz, heads, all_tokens, k}, options);
+    auto prev_value =
+        torch::from_blob(workspace + offset + value_offset, {bsz, heads, all_tokens, k}, options);
     return {output, prev_key, prev_value};
 }
 
@@ -1967,7 +1969,7 @@ void TransformerEncoder(at::Tensor& input,
                                num_heads,
                                _seq_length,
                                _seq_length,
-                               0, 
+                               0,
                                mask_stride,
                                1.0,
                                new_stream);
