@@ -328,20 +328,23 @@ class DeepSpeedSelfAttentionFunction(Function):
                                       attn_qkvw,
                                       attn_qkvw.scale,
                                       attn_qkvb,
+                                      DeepSpeedTransformerInference.layer_id,
+                                      config.bigscience_bloom,
+                                      config.mp_size,
                                       config.enable_qkv_quantization)
             else:
-                qkv_out = qkv_func(
-                    input,
-                    attn_qkvw,
-                    attn_qkvw.scale,
-                    (attn_qkvb if attn_qkvb is not None else norm_b),
-                    norm_w,
-                    norm_b,
-                    config.epsilon,
-                    (attn_qkvb is not None),
-                    1 if config.bigscience_bloom else
-                    DeepSpeedTransformerInference.layer_id,
-                    config.enable_qkv_quantization)
+                qkv_out = qkv_func(input,
+                                   attn_qkvw,
+                                   attn_qkvw.scale,
+                                   (attn_qkvb if attn_qkvb is not None else norm_b),
+                                   norm_w,
+                                   norm_b,
+                                   config.epsilon,
+                                   (attn_qkvb is not None),
+                                   DeepSpeedTransformerInference.layer_id,
+                                   config.bigscience_bloom,
+                                   config.mp_size,
+                                   config.enable_qkv_quantization)
 
             context_layer, key_layer, value_layer = compute_attention(qkv_out[0] if isinstance(qkv_out, list) else qkv_out, input_mask)
 

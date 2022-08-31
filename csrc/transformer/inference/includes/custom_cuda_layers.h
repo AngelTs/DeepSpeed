@@ -17,8 +17,6 @@
 #include <cassert>
 #include <iostream>
 
-#define MAX_OUT_TOKES 1024
-
 #define MAX_THREADS 1024
 #define MAX_WARP_NUM 32
 #define WARP_SIZE 32
@@ -134,7 +132,8 @@ void launch_apply_rotary_pos_emb(T* mixed_query,
                                  unsigned batch,
                                  bool rotate_half,
                                  bool rotate_every_two,
-                                 cudaStream_t stream);
+                                 cudaStream_t stream,
+                                 unsigned max_out_tokens);
 
 template <typename T>
 void launch_moe_res_matmul(T* residual,
@@ -219,7 +218,8 @@ void launch_bias_add_transform_0213(T* outputs,
                                     bool rotate_half,
                                     bool rotate_every_two,
                                     cudaStream_t stream,
-                                    int trans_count);
+                                    int trans_count,
+                                    size_t max_token_length);
 template <typename T>
 void launch_transform_scale(T* vals,
                             T* query,
@@ -232,7 +232,8 @@ void launch_transform_scale(T* vals,
                             int heads,
                             cudaStream_t stream,
                             int trans_count,
-                            float norm_factor);
+                            float norm_factor,
+                            size_t max_token_length);
 
 void run_gemm(void* A,
               void* B,
