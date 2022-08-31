@@ -352,7 +352,8 @@ class DeepSpeedSelfAttentionFunction(Function):
                                         attn_ow,
                                         False,
                                         attn_ow.scale,
-                                        config.q_int8)
+                                        config.q_int,
+                                        config.q_bits)
 
             return output, key_layer, value_layer, context_layer, qkv_out[-1]
 
@@ -426,11 +427,11 @@ class DeepSpeedSelfAttention(nn.Module):
             math.sqrt(self.config.hidden_size // self.config.heads))
         self.qkv_merging = qkv_merging
 
-        self.score_context_func = inference_cuda_module.softmax_context_fp16 if (config.fp16 or config.q_int8) else \
+        self.score_context_func = inference_cuda_module.softmax_context_fp16 if (config.fp16 or config.q_int) else \
                                     inference_cuda_module.softmax_context_fp32
-        self.qkv_func = inference_cuda_module.qkv_gemm_fp16 if config.fp16 or config.q_int8 else \
+        self.qkv_func = inference_cuda_module.qkv_gemm_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.qkv_gemm_fp32
-        self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int8 else \
+        self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.vector_matmul_fp32
         self.linear_func = inference_cuda_module.linear_layer_fp16 if config.fp16 else \
                                     inference_cuda_module.linear_layer_fp32
@@ -517,7 +518,8 @@ class DeepSpeedMLPFunction(Function):
                                      False,
                                      output_w.scale,
                                      inter_w.scale,
-                                     config.q_int)
+                                     config.q_int,
+                                     config.q_bits)
         else:
             output = mlp_gemm_func(input,
                                    residual,
@@ -533,6 +535,7 @@ class DeepSpeedMLPFunction(Function):
                                    output_w.scale,
                                    inter_w.scale,
                                    config.q_int,
+                                   config.q_bits,
                                    config.mlp_act_func_type)
         inference_cuda_module.residual_add(output,
                                            residual,
@@ -604,11 +607,11 @@ class DeepSpeedMLP(nn.Module):
             builder = op_builder.InferenceBuilder()
             inference_cuda_module = builder.load()
 
-        self.mlp_gemm_func = inference_cuda_module.mlp_gemm_fp16 if config.fp16 or config.q_int8 else \
+        self.mlp_gemm_func = inference_cuda_module.mlp_gemm_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.mlp_gemm_fp32
-        self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int8 else \
+        self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int else \
                                 inference_cuda_module.vector_matmul_fp32
-        self.fused_gemm_gelu = inference_cuda_module.fused_gemm_gelu_fp16 if config.fp16 or config.q_int8 else \
+        self.fused_gemm_gelu = inference_cuda_module.fused_gemm_gelu_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.fused_gemm_gelu_fp32
 
         self.bias_residual_func = inference_cuda_module.bias_residual_fp16 if config.fp16 or config.q_int else \

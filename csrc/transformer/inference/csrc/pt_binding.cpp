@@ -837,7 +837,12 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
     if (q_int) {
         int out_size = weight.size(0);
 
-        int bsz1 = (bsz >= 32 && bsz < 128)
+        int bsz1 = bsz;
+        if(q_bits == 4) {
+            // 128-aligned
+            bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
+        } else {
+            bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
                        : (bsz % 128 == 0)
                              ? bsz
@@ -848,10 +853,13 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
                                                 ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
                                                 : bsz + (64 - (bsz % 64)))
                                    : bsz + (128 - (bsz % 128));
-        if (q_bits == 8) {
-            auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
-                        8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
+        }
+
+        auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
+                    8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
+
+        if (q_bits == 8) {
             launch_me((int8_t*)aux_buff,
                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                     (__half*)workspace,
@@ -870,23 +878,15 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
                     bsz1,
                     q_scale.size(0),
                     Context::Instance().GetCurrentStream());
-            if (add_bias)
-                launch_bias_add((T*)output.data_ptr(),
-                                (T*)bias.data_ptr(),
-                                out_size,
-                                bsz,
-                                Context::Instance().GetCurrentStream());
         } else {
-            auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
-                        8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
-
-            launch_me((int8_t*)aux_buff,
+            assert(q_bits == 4);
+            run_quantize_int4((int8_t*)aux_buff,
                       (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                       (__half*)workspace,
                       input.size(2),
                       bsz,
                       Context::Instance().GetCurrentStream());
-            run_gemm(aux_buff,
+            run_gemm_int4(aux_buff,
                      weight.data_ptr(),
                      output.data_ptr(),
                      (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
@@ -897,13 +897,14 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
                      bsz1,
                      q_scale.size(0),
                      Context::Instance().GetCurrentStream());
-            if (add_bias)
-                launch_bias_add((T*)output.data_ptr(),
-                                (T*)bias.data_ptr(),
-                                out_size,
-                                bsz,
-                                Context::Instance().GetCurrentStream());
+
         }
+        if (add_bias)
+            launch_bias_add((T*)output.data_ptr(),
+                            (T*)bias.data_ptr(),
+                            out_size,
+                            bsz,
+                            Context::Instance().GetCurrentStream());
     } else {
         if (bsz > 1) {
             cublasSetStream(Context::Instance().GetCublasHandle(),
@@ -1037,7 +1038,8 @@ at::Tensor ds_linear_layer(at::Tensor& input,
                            unsigned num_layers,
                            bool external_cache,
                            unsigned mp_size,
-                           bool q_int)
+                           bool q_int,
+                           unsigned q_bits)
 {
     auto options = at::TensorOptions()
                        .dtype(input.options().dtype())
@@ -1056,7 +1058,12 @@ at::Tensor ds_linear_layer(at::Tensor& input,
 
     int bsz = input.size(0) * input.size(1);
     if (q_int) {
-        int bsz1 = (bsz >= 32 && bsz < 128)
+        int bsz1 = bsz;
+        if(q_bits == 4) {
+            // 128-aligned
+            bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
+        } else {
+            bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
                        : (bsz % 128 == 0)
                              ? bsz
@@ -1067,28 +1074,52 @@ at::Tensor ds_linear_layer(at::Tensor& input,
                                                 ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
                                                 : bsz + (64 - (bsz % 64)))
                                    : bsz + (128 - (bsz % 128));
+
+        }
+
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
-        launch_me((int8_t*)aux_buff,
-                  (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                  (__half*)input.data_ptr(),
-                  input.size(2),
-                  bsz,
-                  Context::Instance().GetCurrentStream());
+        if(q_bits == 8) {
+            launch_me((int8_t*)aux_buff,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    (__half*)input.data_ptr(),
+                    input.size(2),
+                    bsz,
+                    Context::Instance().GetCurrentStream());
 
-        run_gemm(aux_buff,
-                 weight.data_ptr(),
-                 output.data_ptr(),
-                 (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                 q_scale.data_ptr(),
-                 bsz1,
-                 out_size,
-                 input.size(2),
-                 bsz1,
-                 q_scale.size(0),
-                 Context::Instance().GetCurrentStream());
+            run_gemm(aux_buff,
+                    weight.data_ptr(),
+                    output.data_ptr(),
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    q_scale.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale.size(0),
+                    Context::Instance().GetCurrentStream());
+        } else {
+            assert(q_bits == 4);
+            run_quantize_int4((int8_t*)aux_buff,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    (__half*)input.data_ptr(),
+                    input.size(2),
+                    bsz,
+                    Context::Instance().GetCurrentStream());
 
+            run_gemm_int4(aux_buff,
+                    weight.data_ptr(),
+                    output.data_ptr(),
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    q_scale.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale.size(0),
+                    Context::Instance().GetCurrentStream());
+        }
         launch_bias_add((T*)output.data_ptr(),
                         (T*)bias.data_ptr(),
                         out_size,
@@ -1131,7 +1162,8 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
                             at::Tensor& weight,
                             bool async_op,
                             at::Tensor& q_scale,
-                            bool q_int)
+                            bool q_int,
+                            unsigned q_bits)
 {
     auto options = at::TensorOptions()
                        .dtype(input.options().dtype())
@@ -1144,10 +1176,13 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
         torch::from_blob(workspace, {input.size(0), input.size(1), weight.size(1)}, options);
     int bsz = input.size(0) * input.size(1);
     if (q_int) {
-
         int out_size = weight.size(0);
-
-        int bsz1 = (bsz >= 32 && bsz < 128)
+        int bsz1 = bsz;
+        if(q_bits == 4) {
+            // 128-aligned
+            bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
+        } else {
+            bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
                        : (bsz % 128 == 0)
                              ? bsz
@@ -1158,29 +1193,53 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
                                                 ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
                                                 : bsz + (64 - (bsz % 64)))
                                    : bsz + (128 - (bsz % 128));
+
+        }
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
-        // don't know why I need to call this :-), but I have to !!!
-        launch_me((int8_t*)aux_buff,
-                  (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                  (__half*)input.data_ptr(),
-                  input.size(2),
-                  bsz,
-                  Context::Instance().GetCurrentStream());
+        if(q_bits == 8) {
+            // don't know why I need to call this :-), but I have to !!!
+            launch_me((int8_t*)aux_buff,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    (__half*)input.data_ptr(),
+                    input.size(2),
+                    bsz,
+                    Context::Instance().GetCurrentStream());
 
-        auto output = at::from_blob(workspace, input.sizes(), input.options());
-        run_gemm(aux_buff,
-                 weight.data_ptr(),
-                 workspace,
-                 (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                 q_scale.data_ptr(),
-                 bsz1,
-                 out_size,
-                 input.size(2),
-                 bsz1,
-                 q_scale.size(0),
-                 Context::Instance().GetCurrentStream());
+            auto output = at::from_blob(workspace, input.sizes(), input.options());
+            run_gemm(aux_buff,
+                    weight.data_ptr(),
+                    workspace,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    q_scale.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale.size(0),
+                    Context::Instance().GetCurrentStream());
+        } else {
+            run_quantize_int4((int8_t*)aux_buff,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    (__half*)input.data_ptr(),
+                    input.size(2),
+                    bsz,
+                    Context::Instance().GetCurrentStream());
+
+            auto output = at::from_blob(workspace, input.sizes(), input.options());
+            run_gemm_int4(aux_buff,
+                    weight.data_ptr(),
+                    workspace,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    q_scale.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale.size(0),
+                    Context::Instance().GetCurrentStream());
+        }
     } else {
         if (bsz > 1) {
             float alpha = (T)1.0;
@@ -1234,6 +1293,7 @@ void mlp_unfused_cublas(T* output,
                         at::Tensor& q_scale,
                         at::Tensor& q_scale1,
                         bool q_int,
+                        unsigned q_bits,
                         ActivationFuncType act_func_type)
 {
     int bsz = input.size(0) * input.size(1);
@@ -1254,7 +1314,12 @@ void mlp_unfused_cublas(T* output,
                                Context::Instance().GetCurrentStream());
     if (q_int) {
         int out_size = weight.size(0);
-        int bsz1 = (bsz >= 32 && bsz < 128)
+        int bsz1 = bsz;
+        if(q_bits == 4) {
+            // 128-aligned
+            bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
+        } else {
+            bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
                        : (bsz % 128 == 0)
                              ? bsz
@@ -1265,6 +1330,8 @@ void mlp_unfused_cublas(T* output,
                                                 ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
                                                 : bsz + (64 - (bsz % 64)))
                                    : bsz + (128 - (bsz % 128));
+
+        }
         auto auxilary_buf =
             (T*)Context::Instance().GetWorkSpace() +
             8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
@@ -1293,44 +1360,84 @@ void mlp_unfused_cublas(T* output,
         //         bsz1,
         //         q_scale1.size(0),
         //         Context::Instance().GetCurrentStream());
-        launch_me((int8_t*)auxilary_buf,
-                  (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
-                  (__half*)workspace,
-                  input.size(2),
-                  bsz,
-                  Context::Instance().GetCurrentStream());
-        run_gemm(auxilary_buf,
-                 weight.data_ptr(),
-                 output,
-                 (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
-                 q_scale1.data_ptr(),
-                 bsz1,
-                 out_size,
-                 input.size(2),
-                 bsz1,
-                 q_scale1.size(0),
-                 Context::Instance().GetCurrentStream());
+        if(q_bits == 8) {
+            launch_me((int8_t*)auxilary_buf,
+                    (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
+                    (__half*)workspace,
+                    input.size(2),
+                    bsz,
+                    Context::Instance().GetCurrentStream());
+            run_gemm(auxilary_buf,
+                    weight.data_ptr(),
+                    output,
+                    (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
+                    q_scale1.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale1.size(0),
+                    Context::Instance().GetCurrentStream());
 
-        // TODO: Reza add support for act_func_type of ReLU here
-        launch_bias_gelu_int8((int8_t*)auxilary_buf,
-                              (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
-                              (__half*)output,
-                              (__half*)bias.data_ptr(),
-                              out_size,
-                              bsz,
-                              Context::Instance().GetCurrentStream());
-        run_gemm(auxilary_buf,
-                 weight1.data_ptr(),
-                 output2,
-                 (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
-                 q_scale.data_ptr(),
-                 bsz1,
-                 weight1.size(0),
-                 out_size,
-                 bsz1,
-                 q_scale.size(0),
-                 Context::Instance().GetCurrentStream());
+            // TODO: Reza add support for act_func_type of ReLU here
+            launch_bias_gelu_int8((int8_t*)auxilary_buf,
+                                (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
+                                (__half*)output,
+                                (__half*)bias.data_ptr(),
+                                out_size,
+                                bsz,
+                                Context::Instance().GetCurrentStream());
+            run_gemm(auxilary_buf,
+                    weight1.data_ptr(),
+                    output2,
+                    (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
+                    q_scale.data_ptr(),
+                    bsz1,
+                    weight1.size(0),
+                    out_size,
+                    bsz1,
+                    q_scale.size(0),
+                    Context::Instance().GetCurrentStream());
+        } else {
+            assert(q_bits == 4);
+            run_quantize_int4((int8_t*)auxilary_buf,
+                    (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
+                    (__half*)workspace,
+                    input.size(2),
+                    bsz,
+                    Context::Instance().GetCurrentStream());
+            run_gemm_int4(auxilary_buf,
+                    weight.data_ptr(),
+                    output,
+                    (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
+                    q_scale1.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale1.size(0),
+                    Context::Instance().GetCurrentStream());
 
+            // TODO: Reza add support for act_func_type of ReLU here
+            launch_bias_gelu_int4((int8_t*)auxilary_buf,
+                                (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
+                                (__half*)output,
+                                (__half*)bias.data_ptr(),
+                                out_size,
+                                bsz,
+                                Context::Instance().GetCurrentStream());
+            run_gemm_int4(auxilary_buf,
+                    weight1.data_ptr(),
+                    output2,
+                    (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
+                    q_scale.data_ptr(),
+                    bsz1,
+                    weight1.size(0),
+                    out_size,
+                    bsz1,
+                    q_scale.size(0),
+                    Context::Instance().GetCurrentStream());
+        }
     } else {
         if (bsz > 1) {
             float alpha = (T)1.0;
@@ -1421,6 +1528,7 @@ at::Tensor ds_mlp_gemm(at::Tensor& input,
                        at::Tensor& q_scale,
                        at::Tensor& q_scale1,
                        bool q_int,
+                       unsigned q_bits,
                        int activation_type)
 {
     int out_size = weight1.size(0);
@@ -1455,6 +1563,7 @@ at::Tensor ds_mlp_gemm(at::Tensor& input,
         q_scale,
         q_scale1,
         q_int,
+        q_bits,
         act_func_type);
     return output;
 }
@@ -1469,7 +1578,8 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
                            bool async_op,
                            at::Tensor& q_scale,
                            at::Tensor& q_scale1,
-                           bool q_int)
+                           bool q_int,
+                           unsigned q_bits)
 {
     auto options = at::TensorOptions()
                        .dtype(input.options().dtype())
@@ -1486,7 +1596,12 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
     int bsz = input.size(0) * input.size(1);
     if (q_int) {
         int out_size = weight.size(0);
-        int bsz1 = (bsz >= 32 && bsz < 128)
+        int bsz1 = bsz;
+        if(q_bits == 4) {
+            // 128-aligned
+            bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
+        } else {
+            bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
                        : (bsz % 128 == 0)
                              ? bsz
@@ -1497,44 +1612,85 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
                                                 ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
                                                 : bsz + (64 - (bsz % 64)))
                                    : bsz + (128 - (bsz % 128));
+
+        }
         auto auxilary_buf =
             workspace + 8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
-        launch_me((int8_t*)auxilary_buf,
-                  (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
-                  (__half*)input.data_ptr(),
-                  input.size(2),
-                  bsz,
-                  Context::Instance().GetCurrentStream());
+        if(q_bits == 8) {
+            launch_me((int8_t*)auxilary_buf,
+                    (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
+                    (__half*)input.data_ptr(),
+                    input.size(2),
+                    bsz,
+                    Context::Instance().GetCurrentStream());
 
-        run_gemm(auxilary_buf,
-                 weight.data_ptr(),
-                 workspace,
-                 (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
-                 q_scale1.data_ptr(),
-                 bsz1,
-                 out_size,
-                 input.size(2),
-                 bsz1,
-                 q_scale1.size(0),
-                 Context::Instance().GetCurrentStream());
-        launch_bias_gelu_int8((int8_t*)auxilary_buf,
-                              (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
-                              (__half*)workspace,
-                              (__half*)bias.data_ptr(),
-                              out_size,
-                              bsz,
-                              Context::Instance().GetCurrentStream());
-        run_gemm(auxilary_buf,
-                 weight_out.data_ptr(),
-                 (T*)output.data_ptr(),
-                 (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
-                 q_scale.data_ptr(),
-                 bsz1,
-                 weight_out.size(0),
-                 out_size,
-                 bsz1,
-                 q_scale.size(0),
-                 Context::Instance().GetCurrentStream());
+            run_gemm(auxilary_buf,
+                    weight.data_ptr(),
+                    workspace,
+                    (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
+                    q_scale1.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale1.size(0),
+                    Context::Instance().GetCurrentStream());
+            launch_bias_gelu_int8((int8_t*)auxilary_buf,
+                                (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
+                                (__half*)workspace,
+                                (__half*)bias.data_ptr(),
+                                out_size,
+                                bsz,
+                                Context::Instance().GetCurrentStream());
+            run_gemm(auxilary_buf,
+                    weight_out.data_ptr(),
+                    (T*)output.data_ptr(),
+                    (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
+                    q_scale.data_ptr(),
+                    bsz1,
+                    weight_out.size(0),
+                    out_size,
+                    bsz1,
+                    q_scale.size(0),
+                    Context::Instance().GetCurrentStream());
+        } else {
+            run_quantize_int4((int8_t*)auxilary_buf,
+                    (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
+                    (__half*)input.data_ptr(),
+                    input.size(2),
+                    bsz,
+                    Context::Instance().GetCurrentStream());
+
+            run_gemm_int4(auxilary_buf,
+                    weight.data_ptr(),
+                    workspace,
+                    (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
+                    q_scale1.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale1.size(0),
+                    Context::Instance().GetCurrentStream());
+            launch_bias_gelu_int4((int8_t*)auxilary_buf,
+                                (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
+                                (__half*)workspace,
+                                (__half*)bias.data_ptr(),
+                                out_size,
+                                bsz,
+                                Context::Instance().GetCurrentStream());
+            run_gemm_int4(auxilary_buf,
+                    weight_out.data_ptr(),
+                    (T*)output.data_ptr(),
+                    (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
+                    q_scale.data_ptr(),
+                    bsz1,
+                    weight_out.size(0),
+                    out_size,
+                    bsz1,
+                    q_scale.size(0),
+                    Context::Instance().GetCurrentStream());
+        }
     } else {
         if (bsz > 1) {
             float alpha = (T)1.0;

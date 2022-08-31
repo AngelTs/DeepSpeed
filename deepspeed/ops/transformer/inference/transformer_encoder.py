@@ -118,7 +118,7 @@ class DeepSpeedEncoder(nn.Module):
             torch.empty(self.config.hidden_size,
                         dtype=data_type,
                         device=device))
-        self.encoder_func = inference_cuda_module.encoder_fp16 if config.fp16 or config.q_int8 else \
+        self.encoder_func = inference_cuda_module.encoder_fp16 if config.fp16 or config.q_int else \
                                     inference_cuda_module.encoder_fp32
         self.attention.norm_factor = (1 / self.attention.norm_factor)**2
 
