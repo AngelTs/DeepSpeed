@@ -8,6 +8,8 @@
 #include "cublas_v2.h"
 #include "cuda.h"
 
+#define _100_MEGABYTE (100 * 1024 * 1024)
+
 #define WARP_SIZE 32
 
 #define CUDA_CHECK(callstr)                                                                    \
@@ -39,7 +41,7 @@ inline int DS_GET_BLOCKS(const int N)
 
 class Context {
 public:
-    Context() : _workspace(nullptr), _seed(42), _curr_offset(0), _stream(0)
+    Context() : _workspace(nullptr), _seed(42), _curr_offset(0), _stream(0), _free_memory_size(0)
     {
         if (cublasCreate(&_cublasHandle) != CUBLAS_STATUS_SUCCESS) {
             auto message = std::string("Fail to create cublas handle.");
@@ -71,19 +73,39 @@ public:
         return _ctx;
     }
 
-    void GenWorkSpace(size_t size)
+    inline void GenWorkSpace(const unsigned& num_layers,
+                             const size_t& batch_size,
+                             const size_t& hidden_dim,
+                             const unsigned& mp_size,
+                             const size_t& heads,
+                             const bool& external_cache,
+                             const size_t& elem_size)
     {
+        if (!_free_memory_size) {
+            size_t total_size;
+            cudaMemGetInfo(&_free_memory_size, &total_size);
+        }
+
+        size_t activation_size = 16 * hidden_dim * batch_size;
+        size_t cache_size = num_layers * batch_size * (hidden_dim / mp_size) * 2;
+        _max_seq_len =
+            (((_free_memory_size - _100_MEGABYTE) / elem_size)) / (activation_size + cache_size);
+
+        size_t workSpaceSize = (external_cache ? activation_size : (activation_size + cache_size)) *
+                               _max_seq_len * elem_size;
         if (!_workspace) {
             assert(_workspace == nullptr);
-            cudaMalloc(&_workspace, size);
-        } else if (_workSpaceSize < size) {
+            cudaMalloc(&_workspace, workSpaceSize);
+        } else if (_workSpaceSize < workSpaceSize) {
             cudaFree(_workspace);
-            cudaMalloc(&_workspace, size);
+            cudaMalloc(&_workspace, workSpaceSize);
         }
 
         if (!_workspace) { throw std::runtime_error("Workspace is null."); }
-        _workSpaceSize = size;
+        _workSpaceSize = workSpaceSize;
     }
+
+    inline size_t GetMaxTokenLenght() const { return _max_seq_len; }
 
     cudaEvent_t GetCompEvent(int id) { return id == 1 ? _comp1_event : _comp2_event; }
 
@@ -157,11 +179,13 @@ private:
     uint64_t _seed;
     uint64_t _curr_offset;
     size_t _workSpaceSize;
+    size_t _free_memory_size;
 
     cudaEvent_t _comp1_event;
     cudaEvent_t _comp2_event;
 
     cudaStream_t _stream;
+    size_t _max_seq_len;
 
     unsigned _token_length;
     unsigned _num_tokens;
