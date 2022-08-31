@@ -1,5 +1,5 @@
 
-#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAStream.h>
 #include <torch/extension.h>
 #include <vector>
 #include "context.h"
@@ -8,30 +8,44 @@
 
 std::array<int, 3> gemm_algos = std::array<int, 3>({99, 99, 99});
 
+// NOTE: This activation function type enum should be always in sync
+// with the python counterpart, otherwise the casting from python binding
+// will be incorrect.
+enum class ActivationFuncType { UNKNOWN = 0, GELU = 1, ReLU = 2 };
+
 template <typename T>
 at::Tensor ds_softmax(at::Tensor& attn_scores,
                       at::Tensor& attn_mask,
+                      at::Tensor& alibi,
                       bool triangular,
                       bool recompute,
                       bool local_attention,
                       int window_size,
-                      bool async_op)
+                      bool async_op,
+                      float layer_scale,
+                      int head_offset,
+                      int mp_size)
 {
     auto attn_scores_c = attn_scores.contiguous();
     int bsz = attn_scores_c.size(0);
 
     int seq_len = attn_scores_c.size(1);
     int len = attn_scores_c.sizes().size();
-    if (len > 3) seq_len = attn_scores_c.size(2);
+    if (len > 2) seq_len = attn_scores_c.size(2);
 
     int soft_len = attn_scores_c.size(2);
     if (len > 3) soft_len = attn_scores_c.size(3);
 
     int heads = 1;
-    if (len > 3) heads = attn_scores_c.size(1);
+    if (len > 1) heads = attn_scores_c.size(1);
+
+    int mask_stride = 1;
+    if (attn_mask.sizes().size() > 2) mask_stride = attn_mask.size(2);
 
     launch_attn_softmax_v2((T*)attn_scores_c.data_ptr(),
                            (attn_mask.sizes().size() > 1 ? (T*)attn_mask.data_ptr() : nullptr),
+                           (alibi.sizes().size() > 1 ? (T*)alibi.data_ptr() : nullptr),
+                           layer_scale,
                            triangular,
                            recompute,
                            local_attention,
@@ -40,7 +54,9 @@ at::Tensor ds_softmax(at::Tensor& attn_scores,
                            heads,
                            seq_len,
                            soft_len,
-                           1.0,
+                           head_offset,
+                           mask_stride,
+                           mp_size,
                            Context::Instance().GetCurrentStream(async_op));
 
     return attn_scores_c;
@@ -110,8 +126,13 @@ void ds_softmax_internal(T* attn_scores,
                          int soft_len,
                          int heads)
 {
+
+    int mask_stride = 1;
+    if (attn_mask.sizes().size() > 2) mask_stride = attn_mask.size(2);
     launch_attn_softmax_v2((T*)attn_scores,
                            (attn_mask.sizes().size() > 1 ? (T*)attn_mask.data_ptr() : nullptr),
+                           (T*)nullptr,
+                           1.0,
                            triangular,
                            recompute,
                            local_attention,
@@ -120,11 +141,12 @@ void ds_softmax_internal(T* attn_scores,
                            heads,
                            seq_len,
                            soft_len,
+                           0,
+                           mask_stride,
                            1.0,
                            at::cuda::getCurrentCUDAStream());
 }
 
-/*
 template <typename T>
 void attention_unfused(at::Tensor& prev_key_cont,
                        at::Tensor& query_cont,
@@ -150,6 +172,8 @@ void attention_unfused(at::Tensor& prev_key_cont,
     float gemm_beta = 0.0;
     auto attn_score = at::empty({bsz, heads, seq_len, soft_len}, options);
     int k = prev_value_cont.size(2) / heads;
+    int mask_stride = 1;
+    if (attn_mask.sizes().size() > 2) mask_stride = attn_mask.size(2);
     cublasSetStream(Context::Instance().GetCublasHandle(), Context::Instance().GetCurrentStream());
     cublas_strided_batched_gemm(Context::Instance().GetCublasHandle(),
                                 soft_len,
@@ -171,8 +195,22 @@ void attention_unfused(at::Tensor& prev_key_cont,
 #else
                                 CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 #endif
-    attn_score = ds_softmax<T>(
-        attn_score, attn_mask, triangular, recompute, local_attention, window_size, false);
+    launch_attn_softmax_v2((T*)attn_score.data_ptr(),
+                           (T*)(attn_mask.sizes().size() > 1 ? attn_mask.data_ptr() : nullptr),
+                           (T*)nullptr,
+                           1.0,
+                           triangular,
+                           recompute,
+                           local_attention,
+                           window_size,
+                           bsz,
+                           heads,
+                           seq_len,
+                           soft_len,
+                           0,
+                           mask_stride,
+                           1,
+                           Context::Instance().GetCurrentStream(false));
     alpha = 1.0;
     cublas_strided_batched_gemm(Context::Instance().GetCublasHandle(),
                                 k,
@@ -197,19 +235,19 @@ void attention_unfused(at::Tensor& prev_key_cont,
 }
 
 template <typename T>
-std::vector<at::Tensor> ds_softmax_context(at::Tensor& query,
-                                           at::Tensor& prev_key,
-                                           at::Tensor& new_key,
-                                           at::Tensor& attn_mask,
-                                           at::Tensor& prev_value,
-                                           at::Tensor& new_value,
-                                           int heads,
-                                           float norm_factor,
-                                           bool merging,
-                                           bool triangular,
-                                           bool local_attention,
-                                           int window_size,
-                                           bool no_masking)
+std::vector<at::Tensor> ds_softmax_context1(at::Tensor& query,
+                                            at::Tensor& prev_key,
+                                            at::Tensor& new_key,
+                                            at::Tensor& attn_mask,
+                                            at::Tensor& prev_value,
+                                            at::Tensor& new_value,
+                                            int heads,
+                                            float norm_factor,
+                                            bool merging,
+                                            bool triangular,
+                                            bool local_attention,
+                                            int window_size,
+                                            bool no_masking)
 {
     auto query_cont = query.contiguous();
     auto prev_key_cont = prev_key.contiguous();
@@ -248,7 +286,6 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query,
 
     return {output, prev_key, prev_value};
 }
-*/
 
 template <typename T>
 void attention_unfused(T* prev_key_cont,
@@ -316,6 +353,276 @@ void attention_unfused(T* prev_key_cont,
                                 bsz * heads,
                                 CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
+
+// template <typename T>
+// std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
+//                                            at::Tensor& attn_mask,
+//                                            int rotary_dim,
+//                                            bool rotate_half,
+//                                            bool rotate_every_two,
+//                                            int heads,
+//                                            float norm_factor,
+//                                            bool triangular,
+//                                            bool local_attention,
+//                                            int window_size,
+//                                            bool no_masking,
+//                                            unsigned layer_id,
+//                                            unsigned num_layers)
+// {
+//     unsigned bsz = query_key_value.size(0);
+//     unsigned seq_len = query_key_value.size(1);
+//     unsigned hidden_dim = query_key_value.size(2) / 3;
+
+//     bool is_prompt = (seq_len > 1);
+
+//     if (is_prompt) Context::Instance().reset_tokens(seq_len);
+//     unsigned soft_len = Context::Instance().current_tokens();
+
+//     int k = hidden_dim / heads;
+//     auto options = at::TensorOptions()
+//                        .dtype(query_key_value.options().dtype())
+//                        .layout(at::kStrided)
+//                        .device(at::kCUDA)
+//                        .requires_grad(false);
+
+//     T* workspace = (T*)Context::Instance().GetWorkSpace();
+
+//     auto output = torch::from_blob(workspace, {bsz, seq_len, hidden_dim}, options);
+
+//     auto query_cont = workspace;
+//     size_t offset =
+//         16 * (hidden_dim * bsz * MAX_OUT_TOKES) + layer_id * 2 * bsz * MAX_OUT_TOKES *
+//         hidden_dim;
+
+//     unsigned all_tokens = soft_len;
+//     auto kv_cache = workspace + offset + (hidden_dim / heads) * (is_prompt ? 0 : soft_len - 1);
+//     size_t value_offset = bsz * MAX_OUT_TOKES * hidden_dim;
+
+//     T* temp_buf = (T*)output.data_ptr() + at::numel(output);
+//     if (rotary_dim > 0 && rotate_half) {
+//         launch_bias_add_transform_0213<T>((T*)query_cont,
+//                                           kv_cache,
+//                                           kv_cache + value_offset,
+//                                           (T*)query_key_value.data_ptr(),
+//                                           nullptr,
+//                                           bsz,
+//                                           seq_len,
+//                                           (is_prompt ? 0 : soft_len - 1),
+//                                           soft_len,
+//                                           hidden_dim,
+//                                           heads,
+//                                           rotary_dim,
+//                                           rotate_half,
+//                                           rotate_every_two,
+//                                           Context::Instance().GetCurrentStream(),
+//                                           3);
+//         launch_apply_rotary_pos_emb(query_cont,
+//                                     kv_cache,
+//                                     k,
+//                                     seq_len,
+//                                     rotary_dim,
+//                                     (is_prompt ? 0 : soft_len - 1),
+//                                     heads,
+//                                     bsz,
+//                                     rotate_half,
+//                                     rotate_every_two,
+//                                     Context::Instance().GetCurrentStream());
+//         attention_unfused<T>(workspace + offset,
+//                              (T*)query_cont,
+//                              attn_mask,
+//                              workspace + offset + value_offset,
+//                              temp_buf,
+//                              bsz,
+//                              k,
+//                              seq_len,
+//                              all_tokens,
+//                              heads,
+//                              norm_factor,
+//                              (triangular && is_prompt),
+//                              is_prompt,
+//                              local_attention,
+//                              window_size);
+//     } else if (seq_len >= 32 || (bsz * (hidden_dim / heads)) > 128) {
+//         launch_bias_add_transform_0213<T>((T*)query_cont,
+//                                           kv_cache,
+//                                           kv_cache + value_offset,
+//                                           (T*)query_key_value.data_ptr(),
+//                                           nullptr,
+//                                           bsz,
+//                                           seq_len,
+//                                           (is_prompt ? 0 : soft_len - 1),
+//                                           soft_len,
+//                                           hidden_dim,
+//                                           heads,
+//                                           rotary_dim,
+//                                           rotate_half,
+//                                           rotate_every_two,
+//                                           Context::Instance().GetCurrentStream(),
+//                                           3);
+//         attention_unfused<T>(workspace + offset,
+//                              (T*)query_cont,
+//                              attn_mask,
+//                              workspace + offset + value_offset,
+//                              temp_buf,
+//                              bsz,
+//                              k,
+//                              seq_len,
+//                              all_tokens,
+//                              heads,
+//                              norm_factor,
+//                              (triangular && is_prompt),
+//                              is_prompt,
+//                              local_attention,
+//                              window_size);
+//     } else {
+//         launch_attn_softmax_context((T*)temp_buf,
+//                                     (T*)query_key_value.data_ptr(),
+//                                     (T*)(attn_mask.data_ptr()),
+//                                     norm_factor,
+//                                     (workspace + offset),
+//                                     (workspace + offset + value_offset),
+//                                     (T*)nullptr,
+//                                     true,
+//                                     (triangular && is_prompt),
+//                                     is_prompt,  // recompute
+//                                     bsz,
+//                                     heads,
+//                                     hidden_dim / heads,
+//                                     (is_prompt ? soft_len : soft_len - 1),
+//                                     seq_len,
+//                                     all_tokens,
+//                                     1.0,
+//                                     at::cuda::getCurrentCUDAStream());
+//     }
+//     launch_transform4d_0213<T>((T*)output.data_ptr(),
+//                                temp_buf,
+//                                bsz,
+//                                heads,
+//                                seq_len,
+//                                output.size(2),
+//                                Context::Instance().GetCurrentStream(false),
+//                                1);
+
+//     if (layer_id == num_layers - 1) Context::Instance().advance_tokens();
+//     auto prev_key = torch::from_blob(workspace + offset, {bsz, all_tokens, hidden_dim}, options);
+//     auto prev_value = torch::from_blob(workspace + offset + value_offset, {bsz, all_tokens,
+//     hidden_dim}, options); return {output, prev_key, prev_value};
+// }
+
+template <typename T>
+void ds_softmax_internal(T* attn_scores,
+                         at::Tensor& attn_mask,
+                         at::Tensor& alibi,
+                         float& layer_scale,
+                         bool triangular,
+                         bool recompute,
+                         bool local_attention,
+                         int window_size,
+                         int bsz,
+                         int seq_len,
+                         int soft_len,
+                         int heads)
+{
+    int mask_stride = 1;
+    if (attn_mask.sizes().size() > 2) mask_stride = attn_mask.size(2);
+    launch_attn_softmax_v2((T*)attn_scores,
+                           (attn_mask.sizes().size() > 1 ? (T*)attn_mask.data_ptr() : nullptr),
+                           (alibi.sizes().size() > 1 ? (T*)alibi.data_ptr() : nullptr),
+                           layer_scale,
+                           triangular,
+                           recompute,
+                           local_attention,
+                           window_size,
+                           bsz,
+                           heads,
+                           seq_len,
+                           soft_len,
+                           0,
+                           mask_stride,
+                           1,
+                           at::cuda::getCurrentCUDAStream());
+}
+
+template <typename T>
+void attention_unfused(T* prev_key_cont,
+                       T* query_cont,
+                       at::Tensor& attn_mask,
+                       T* prev_value_cont,
+                       T* output,
+                       unsigned& bsz,
+                       int& k,
+                       unsigned& seq_len,
+                       unsigned& soft_len,
+                       int& heads,
+                       float& norm_factor,
+                       bool triangular,
+                       bool recompute,
+                       bool local_attention,
+                       int window_size,
+                       at::Tensor& alibi,
+                       int layer_id)
+{
+    float layer_scale = alibi.sizes().size() > 1 ? std::max(1, layer_id) : 1.0;
+    float alpha = norm_factor * norm_factor / layer_scale;
+    float gemm_beta = 0.0;
+    T* workspace = (T*)output + bsz * seq_len * heads * k;
+
+    cublasSetStream(Context::Instance().GetCublasHandle(), Context::Instance().GetCurrentStream());
+    cublas_strided_batched_gemm(Context::Instance().GetCublasHandle(),
+                                soft_len,
+                                seq_len,
+                                k,
+                                &alpha,
+                                &gemm_beta,
+                                (T*)prev_key_cont,
+                                (T*)query_cont,
+                                workspace,
+                                CUBLAS_OP_T,
+                                CUBLAS_OP_N,
+                                MAX_OUT_TOKES * k,
+                                seq_len * k,
+                                seq_len * soft_len,
+                                bsz * heads,
+#ifdef __HIP_PLATFORM_HCC__
+                                rocblas_gemm_algo_standard);
+#else
+                                CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+#endif
+    ds_softmax_internal<T>(workspace,
+                           attn_mask,
+                           alibi,
+                           layer_scale,
+                           triangular,
+                           recompute,
+                           local_attention,
+                           window_size,
+                           bsz,
+                           seq_len,
+                           soft_len,
+                           heads);
+    alpha = 1.0;
+    cublas_strided_batched_gemm(Context::Instance().GetCublasHandle(),
+                                k,
+                                seq_len,
+                                soft_len,
+                                &alpha,
+                                &gemm_beta,
+                                (T*)prev_value_cont,
+                                workspace,
+                                (T*)output,
+                                CUBLAS_OP_N,
+                                CUBLAS_OP_N,
+                                MAX_OUT_TOKES * k,
+                                seq_len * soft_len,
+                                seq_len * k,
+                                bsz * heads,
+#ifdef __HIP_PLATFORM_HCC__
+                                rocblas_gemm_algo_standard);
+#else
+                                CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+#endif
+}
+
 template <typename T>
 std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
                                            at::Tensor& attn_mask,
@@ -329,7 +636,8 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
                                            int window_size,
                                            bool no_masking,
                                            unsigned layer_id,
-                                           unsigned num_layers)
+                                           unsigned num_layers,
+                                           at::Tensor& alibi)
 {
     unsigned bsz = query_key_value.size(0);
     unsigned seq_len = query_key_value.size(1);
@@ -348,10 +656,10 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
                        .requires_grad(false);
 
     T* workspace = (T*)Context::Instance().GetWorkSpace();
+    size_t buf_size = bsz * seq_len * hidden_dim;
+    auto output = torch::from_blob(workspace + 4 * buf_size, {bsz, seq_len, hidden_dim}, options);
 
-    auto output = torch::from_blob(workspace, {bsz, seq_len, hidden_dim}, options);
-
-    auto query_cont = workspace;
+    auto query_cont = workspace + 8 * buf_size;
     size_t offset =
         16 * (hidden_dim * bsz * MAX_OUT_TOKES) + layer_id * 2 * bsz * MAX_OUT_TOKES * hidden_dim;
 
@@ -360,23 +668,23 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
     size_t value_offset = bsz * MAX_OUT_TOKES * hidden_dim;
 
     T* temp_buf = (T*)output.data_ptr() + at::numel(output);
-    if (rotary_dim > 0 && rotate_half) {
-        launch_bias_add_transform_0213<T>((T*)query_cont,
-                                          kv_cache,
-                                          kv_cache + value_offset,
-                                          (T*)query_key_value.data_ptr(),
-                                          nullptr,
-                                          bsz,
-                                          seq_len,
-                                          (is_prompt ? 0 : soft_len - 1),
-                                          soft_len,
-                                          hidden_dim,
-                                          heads,
-                                          rotary_dim,
-                                          rotate_half,
-                                          rotate_every_two,
-                                          Context::Instance().GetCurrentStream(),
-                                          3);
+    launch_bias_add_transform_0213<T>((T*)query_cont,
+                                      kv_cache,
+                                      kv_cache + value_offset,
+                                      (T*)query_key_value.data_ptr(),
+                                      nullptr,
+                                      bsz,
+                                      seq_len,
+                                      (is_prompt ? 0 : soft_len - 1),
+                                      soft_len,
+                                      hidden_dim,
+                                      heads,
+                                      rotary_dim,
+                                      rotate_half,
+                                      rotate_every_two,
+                                      Context::Instance().GetCurrentStream(),
+                                      3);
+    if (rotary_dim > 0 && rotate_half)
         launch_apply_rotary_pos_emb(query_cont,
                                     kv_cache,
                                     k,
@@ -388,73 +696,24 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
                                     rotate_half,
                                     rotate_every_two,
                                     Context::Instance().GetCurrentStream());
-        attention_unfused<T>(workspace + offset,
-                             (T*)query_cont,
-                             attn_mask,
-                             workspace + offset + value_offset,
-                             temp_buf,
-                             bsz,
-                             k,
-                             seq_len,
-                             all_tokens,
-                             heads,
-                             norm_factor,
-                             (triangular && is_prompt),
-                             is_prompt,
-                             local_attention,
-                             window_size);
-    } else if (seq_len >= 32 || (bsz * (hidden_dim / heads)) > 128) {
-        launch_bias_add_transform_0213<T>((T*)query_cont,
-                                          kv_cache,
-                                          kv_cache + value_offset,
-                                          (T*)query_key_value.data_ptr(),
-                                          nullptr,
-                                          bsz,
-                                          seq_len,
-                                          (is_prompt ? 0 : soft_len - 1),
-                                          soft_len,
-                                          hidden_dim,
-                                          heads,
-                                          rotary_dim,
-                                          rotate_half,
-                                          rotate_every_two,
-                                          Context::Instance().GetCurrentStream(),
-                                          3);
-        attention_unfused<T>(workspace + offset,
-                             (T*)query_cont,
-                             attn_mask,
-                             workspace + offset + value_offset,
-                             temp_buf,
-                             bsz,
-                             k,
-                             seq_len,
-                             all_tokens,
-                             heads,
-                             norm_factor,
-                             (triangular && is_prompt),
-                             is_prompt,
-                             local_attention,
-                             window_size);
-    } else {
-        launch_attn_softmax_context((T*)temp_buf,
-                                    (T*)query_key_value.data_ptr(),
-                                    (T*)(attn_mask.data_ptr()),
-                                    norm_factor,
-                                    (workspace + offset),
-                                    (workspace + offset + value_offset),
-                                    (T*)nullptr,
-                                    true,
-                                    (triangular && is_prompt),
-                                    is_prompt,  // recompute
-                                    bsz,
-                                    heads,
-                                    hidden_dim / heads,
-                                    (is_prompt ? soft_len : soft_len - 1),
-                                    seq_len,
-                                    all_tokens,
-                                    1.0,
-                                    at::cuda::getCurrentCUDAStream());
-    }
+
+    attention_unfused<T>(workspace + offset,
+                         (T*)query_cont,
+                         attn_mask,
+                         workspace + offset + value_offset,
+                         temp_buf,
+                         bsz,
+                         k,
+                         seq_len,
+                         all_tokens,
+                         heads,
+                         norm_factor,
+                         (triangular && is_prompt),
+                         is_prompt,
+                         local_attention,
+                         window_size,
+                         alibi,
+                         layer_id);
     launch_transform4d_0213<T>((T*)output.data_ptr(),
                                temp_buf,
                                bsz,
@@ -465,9 +724,9 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
                                1);
 
     if (layer_id == num_layers - 1) Context::Instance().advance_tokens();
-    auto prev_key = torch::from_blob(workspace + offset, {bsz, all_tokens, hidden_dim}, options);
+    auto prev_key = torch::from_blob(workspace + offset, {bsz, heads, all_tokens, k}, options);
     auto prev_value =
-        torch::from_blob(workspace + offset + value_offset, {bsz, all_tokens, hidden_dim}, options);
+        torch::from_blob(workspace + offset + value_offset, {bsz, heads, all_tokens, k}, options);
     return {output, prev_key, prev_value};
 }
 
@@ -480,6 +739,22 @@ at::Tensor ds_bias_gelu(at::Tensor& input, at::Tensor& bias)
     int intermediate_size = input_cont.size(2);
 
     launch_bias_gelu((T*)input_cont.data_ptr(),
+                     (T*)bias.data_ptr(),
+                     intermediate_size,
+                     bsz,
+                     Context::Instance().GetCurrentStream());
+    return input_cont;
+}
+
+template <typename T>
+at::Tensor ds_bias_relu(at::Tensor& input, at::Tensor& bias)
+{
+    auto input_cont = input.contiguous();
+
+    int bsz = input_cont.size(0) * input_cont.size(1);
+    int intermediate_size = input_cont.size(2);
+
+    launch_bias_relu((T*)input_cont.data_ptr(),
                      (T*)bias.data_ptr(),
                      intermediate_size,
                      bsz,
@@ -559,6 +834,7 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
     ds_layernorm_internal<T>(workspace, input, gamma, beta, epsilon);
     if (q_int) {
         int out_size = weight.size(0);
+
         int bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
                        : (bsz % 128 == 0)
@@ -573,23 +849,25 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
         if (q_bits == 8) {
             auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                             8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
+
             launch_me((int8_t*)aux_buff,
-                      (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                      (__half*)workspace,
-                      input.size(2),
-                      bsz,
-                      Context::Instance().GetCurrentStream());
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    (__half*)workspace,
+                    input.size(2),
+                    bsz,
+                    Context::Instance().GetCurrentStream());
+
             run_gemm(aux_buff,
-                     weight.data_ptr(),
-                     output.data_ptr(),
-                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                     q_scale.data_ptr(),
-                     bsz1,
-                     out_size,
-                     input.size(2),
-                     bsz1,
-                     q_scale.size(0),
-                     Context::Instance().GetCurrentStream());
+                    weight.data_ptr(),
+                    output.data_ptr(),
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    q_scale.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale.size(0),
+                    Context::Instance().GetCurrentStream());
             if (add_bias)
                 launch_bias_add((T*)output.data_ptr(),
                                 (T*)bias.data_ptr(),
@@ -599,6 +877,7 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
         } else {
             auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                             8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
+
             launch_me((int8_t*)aux_buff,
                       (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                       (__half*)workspace,
@@ -675,7 +954,8 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
                                     unsigned q_bits)
 {
     int bsz = input.size(0) * input.size(1);
-    int out_size = q_int ? weight.size(0) : weight.size(1);
+    int out_size = weight.size(1);
+
     T* workspace = (T*)Context::Instance().GetWorkSpace();
     if (!workspace) {
         cublasSetStream(Context::Instance().GetCublasHandle(),
@@ -694,7 +974,6 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
 
     auto inp_norm = qkv_unfused_cublas<T>(
         output, input, weight, q_scale, bias, gamma, beta, epsilon, add_bias, q_int, q_bits);
-
     return {output, inp_norm};
 }
 
@@ -779,6 +1058,9 @@ at::Tensor ds_qkv_gemm_int8(at::Tensor& input,
     return output;
 }
 
+// TODO: Reza check workspace differences between specialized and public, the
+// public version was allocating the workspace w.r.t. #layers but we're not doing that in
+// specialized
 template <typename T>
 at::Tensor ds_linear_layer(at::Tensor& input,
                            at::Tensor& weight,
@@ -911,6 +1193,7 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
         torch::from_blob(workspace, {input.size(0), input.size(1), weight.size(1)}, options);
     int bsz = input.size(0) * input.size(1);
     if (q_int) {
+
         int out_size = weight.size(0);
 
         int bsz1 = (bsz >= 32 && bsz < 128)
@@ -1019,7 +1302,8 @@ void mlp_unfused_cublas(T* output,
                         bool mlp_after_attn,
                         at::Tensor& q_scale,
                         at::Tensor& q_scale1,
-                        bool q_int)
+                        bool q_int,
+                        ActivationFuncType act_func_type)
 {
     int bsz = input.size(0) * input.size(1);
     T* workspace = (T*)Context::Instance().GetWorkSpace() + 4 * at::numel(input);
@@ -1094,6 +1378,8 @@ void mlp_unfused_cublas(T* output,
                  bsz1,
                  q_scale1.size(0),
                  Context::Instance().GetCurrentStream());
+
+        // TODO: Reza add support for act_func_type of ReLU here
         launch_bias_gelu_int8((int8_t*)auxilary_buf,
                               (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
                               (__half*)output,
@@ -1135,11 +1421,19 @@ void mlp_unfused_cublas(T* output,
 #else
                            CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 #endif
-            launch_bias_gelu((T*)output,
-                             (T*)bias.data_ptr(),
-                             weight.size(1),
-                             bsz,
-                             Context::Instance().GetCurrentStream());
+            if (act_func_type == ActivationFuncType::GELU) {
+                launch_bias_gelu((T*)output,
+                                 (T*)bias.data_ptr(),
+                                 weight.size(1),
+                                 bsz,
+                                 Context::Instance().GetCurrentStream());
+            } else if (act_func_type == ActivationFuncType::ReLU) {
+                launch_bias_relu((T*)output,
+                                 (T*)bias.data_ptr(),
+                                 weight.size(1),
+                                 bsz,
+                                 Context::Instance().GetCurrentStream());
+            }
             cublas_gemm_ex(Context::Instance().GetCublasHandle(),
                            CUBLAS_OP_N,
                            CUBLAS_OP_N,
@@ -1157,6 +1451,7 @@ void mlp_unfused_cublas(T* output,
                            CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 #endif
         } else {
+            // TODO: Reza check for activation function, need to support ReLU
             launch_input_tiled_gemm_kernel((T*)output,
                                            (T*)workspace,
                                            (T*)weight.data_ptr(),
@@ -1178,6 +1473,7 @@ void mlp_unfused_cublas(T* output,
         }
     }
 }
+
 template <typename T>
 at::Tensor ds_mlp_gemm(at::Tensor& input,
                        at::Tensor& residual,
@@ -1192,7 +1488,8 @@ at::Tensor ds_mlp_gemm(at::Tensor& input,
                        bool mlp_after_attn,
                        at::Tensor& q_scale,
                        at::Tensor& q_scale1,
-                       bool q_int)
+                       bool q_int,
+                       int activation_type)
 {
     int out_size = weight1.size(0);
     auto options = at::TensorOptions()
@@ -1207,6 +1504,7 @@ at::Tensor ds_mlp_gemm(at::Tensor& input,
 
     int bsz = input.size(0) * input.size(1);
 
+    auto act_func_type = static_cast<ActivationFuncType>(activation_type);
     mlp_unfused_cublas<T>(workspace,
                           workspace + 4 * input.size(0) * MAX_OUT_TOKES * input.size(2),
                           mlp_after_attn ? input : residual,
@@ -1222,7 +1520,8 @@ at::Tensor ds_mlp_gemm(at::Tensor& input,
                           mlp_after_attn,
                           q_scale,
                           q_scale1,
-                          q_int);
+                          q_int,
+                          act_func_type);
     return output;
 }
 
@@ -1418,6 +1717,7 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
     return output;
 }
 
+// TODO: Reza needs to check API definition of transformer inference side
 void residual_add_bias(at::Tensor& output,
                        at::Tensor& input,
                        at::Tensor& attention_output,
@@ -1425,7 +1725,8 @@ void residual_add_bias(at::Tensor& output,
                        at::Tensor& attention_b,
                        int mp_size,
                        bool mlp_after_attn,
-                       bool has_attn_bias)
+                       bool has_attn_bias,
+                       bool preln)
 {
     int bsz = input.size(0) * input.size(1);
     int hidden_size = input.size(2);
@@ -1441,6 +1742,7 @@ void residual_add_bias(at::Tensor& output,
                                  bsz,
                                  hidden_size,
                                  mp_size,
+                                 preln,
                                  Context::Instance().GetCurrentStream());
         else
             launch_gptj_residual_add<float>(
@@ -1462,6 +1764,7 @@ void residual_add_bias(at::Tensor& output,
                              bsz,
                              hidden_size,
                              mp_size,
+                             preln,
                              Context::Instance().GetCurrentStream());
     else
         launch_gptj_residual_add<__half>(
@@ -1639,18 +1942,19 @@ void TransformerEncoder(at::Tensor& input,
         // 128-aligned
         bsz1 = bsz_seq % 128 == 0 ? bsz_seq : (bsz_seq / 128 + 1) * 128;
     } else {
-        bsz1 = (bsz_seq >= 32 && bsz_seq < 128)
-            ? 128
-            : (bsz_seq % 128 == 0)
-                  ? bsz_seq
-                  : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
-                        ? ((bsz_seq % 64 == 0)
-                               ? bsz_seq
-                               : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
-                                     ? ((bsz_seq % 32 == 0) ? bsz_seq
-                                                            : bsz_seq + (32 - (bsz_seq % 32)))
-                                     : bsz_seq + (64 - (bsz_seq % 64)))
-                        : bsz_seq + (128 - (bsz_seq % 128));
+        bsz1 =
+            (bsz_seq >= 32 && bsz_seq < 128)
+                ? 128
+                : (bsz_seq % 128 == 0)
+                    ? bsz_seq
+                    : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
+                            ? ((bsz_seq % 64 == 0)
+                                ? bsz_seq
+                                : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
+                                        ? ((bsz_seq % 32 == 0) ? bsz_seq
+                                                                : bsz_seq + (32 - (bsz_seq % 32)))
+                                        : bsz_seq + (64 - (bsz_seq % 64)))
+                            : bsz_seq + (128 - (bsz_seq % 128));
     }
     auto aux_buff =
         (T*)Context::Instance().GetWorkSpace() + 8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
@@ -1673,7 +1977,7 @@ void TransformerEncoder(at::Tensor& input,
                           bsz_seq,
                           hidden_dim,
                           new_stream);
-    if (q_int) {
+    if (q_int and enable_qkv_quantization) {
         auto options = at::TensorOptions()
                            .dtype(input.options().dtype())
                            .layout(input.options().layout())
@@ -1695,23 +1999,22 @@ void TransformerEncoder(at::Tensor& input,
         int out_size = attn_weights[0].size(0);
         if (q_bits == 8) {
             launch_me((int8_t*)aux_buff,
-                      (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                      (__half*)(preln ? buf_0 : input_ptr),
-                      input.size(2),
-                      bsz_seq,
-                      Context::Instance().GetCurrentStream());
-
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    (__half*)(preln ? buf_0 : input_ptr),
+                    input.size(2),
+                    bsz_seq,
+                    Context::Instance().GetCurrentStream());
             run_gemm(aux_buff,
-                     attn_weights[0].data_ptr(),
-                     buf_1,
-                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                     q_scale3.data_ptr(),
-                     bsz1,
-                     out_size,
-                     input.size(2),
-                     bsz1,
-                     q_scale3.size(0),
-                     Context::Instance().GetCurrentStream());
+                    attn_weights[0].data_ptr(),
+                    buf_1,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    q_scale3.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale3.size(0),
+                    Context::Instance().GetCurrentStream());
 
             // c10::Half buf_11[10];
             // cudaMemcpy(buf_11, buf_1, sizeof(c10::Half) * 10, cudaMemcpyDeviceToHost);
@@ -1805,8 +2108,12 @@ void TransformerEncoder(at::Tensor& input,
                                     bsz_heads,
                                     CUBLAS_GEMM_DEFAULT_TENSOR_OP);
         alpha = 1.0;
+        int mask_stride = 1;
+        if (input_mask.sizes().size() > 2) mask_stride = input_mask.size(2);
         launch_attn_softmax_v2(buf_3,
                                (T*)input_mask.data_ptr(),
+                               (T*)nullptr,
+                               1.0,
                                false,
                                true,
                                false,
@@ -1815,8 +2122,12 @@ void TransformerEncoder(at::Tensor& input,
                                num_heads,
                                _seq_length,
                                _seq_length,
+
+                               0,
+                               mask_stride,
                                1.0,
                                new_stream);
+
         cublas_strided_batched_gemm(cub_handle,
                                     head_size,
                                     _seq_length,
@@ -1859,22 +2170,22 @@ void TransformerEncoder(at::Tensor& input,
         int out_size = attn_weights[1].size(0);
         if (q_bits == 8) {
             launch_me((int8_t*)aux_buff,
-                      (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                      (__half*)buf_2,
-                      input.size(2),
-                      bsz_seq,
-                      new_stream);
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    (__half*)buf_2,
+                    input.size(2),
+                    bsz_seq,
+                    Context::Instance().GetCurrentStream());
             run_gemm(aux_buff,
-                     attn_weights[1].data_ptr(),
-                     buf_1,
-                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                     q_scale2.data_ptr(),
-                     bsz1,
-                     out_size,
-                     input.size(2),
-                     bsz1,
-                     q_scale2.size(0),
-                     new_stream);
+                    attn_weights[1].data_ptr(),
+                    buf_1,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    q_scale2.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale2.size(0),
+                    Context::Instance().GetCurrentStream());
         } else {
             assert(q_bits == 4);
             std::cout << "attn_o q_bits == 4" << std::endl;
@@ -1924,41 +2235,41 @@ void TransformerEncoder(at::Tensor& input,
         int out_size = mlp_weights[0].size(0);
         if (q_bits == 8) {
             launch_me((int8_t*)aux_buff,
-                      (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                      (__half*)buf_4,
-                      input.size(2),
-                      bsz_seq,
-                      new_stream);
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    (__half*)buf_4,
+                    input.size(2),
+                    bsz_seq,
+                    Context::Instance().GetCurrentStream());
 
             run_gemm(aux_buff,
-                     mlp_weights[0].data_ptr(),
-                     aux_buff1,
-                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                     q_scale1.data_ptr(),
-                     bsz1,
-                     out_size,
-                     input.size(2),
-                     bsz1,
-                     q_scale1.size(0),
-                     new_stream);
+                    mlp_weights[0].data_ptr(),
+                    buf_0,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    q_scale1.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale1.size(0),
+                    Context::Instance().GetCurrentStream());
             launch_bias_gelu_int8((int8_t*)aux_buff,
-                                  (float*)((int8_t*)aux_buff + bsz1 * out_size),
-                                  (__half*)aux_buff1,
-                                  (__half*)mlp_biases[0].data_ptr(),
-                                  out_size,
-                                  bsz_seq,
-                                  Context::Instance().GetCurrentStream());
+                                (float*)((int8_t*)aux_buff + bsz1 * out_size),
+                                (__half*)buf_0,
+                                (__half*)mlp_biases[0].data_ptr(),
+                                out_size,
+                                bsz_seq,
+                                Context::Instance().GetCurrentStream());
             run_gemm(aux_buff,
-                     mlp_weights[1].data_ptr(),
-                     (T*)buf_5,
-                     (float*)((int8_t*)aux_buff + bsz1 * out_size),
-                     q_scale.data_ptr(),
-                     bsz1,
-                     mlp_weights[1].size(0),
-                     out_size,
-                     bsz1,
-                     q_scale.size(0),
-                     new_stream);
+                    mlp_weights[1].data_ptr(),
+                    (T*)buf_5,
+                    (float*)((int8_t*)aux_buff + bsz1 * out_size),
+                    q_scale.data_ptr(),
+                    bsz1,
+                    mlp_weights[1].size(0),
+                    out_size,
+                    bsz1,
+                    q_scale.size(0),
+                    Context::Instance().GetCurrentStream());
         } else {
             assert(q_bits == 4);
             std::cout << "mlp q_bits == 4" << std::endl;
@@ -2051,143 +2362,6 @@ void TransformerEncoder(at::Tensor& input,
                               preln,
                               new_stream);
 }
-at::Tensor int8_matmul(at::Tensor& a, at::Tensor& b, at::Tensor& ascale, at::Tensor& bscale)
-{
-    unsigned bsz = a.size(0);
-    unsigned _seq_length = a.size(1);
-    int bsz_seq = bsz * _seq_length;
-    int bsz1 =
-        (bsz_seq >= 32 && bsz_seq < 128)
-            ? 128
-            : (bsz_seq % 128 == 0)
-                  ? bsz_seq
-                  : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
-                        ? ((bsz_seq % 64 == 0)
-                               ? bsz_seq
-                               : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
-                                     ? ((bsz_seq % 32 == 0) ? bsz_seq
-                                                            : bsz_seq + (32 - (bsz_seq % 32)))
-                                     : bsz_seq + (64 - (bsz_seq % 64)))
-                        : bsz_seq + (128 - (bsz_seq % 128));
-
-    auto options = at::TensorOptions()
-                       .dtype(at::kHalf)
-                       .layout(at::kStrided)
-                       .device(at::kCUDA)
-                       .requires_grad(false);
-    auto c = at::empty({1, bsz1, b.size(0)}, options);
-    run_gemm(a.data_ptr(),
-             b.data_ptr(),
-             c.data_ptr(),
-             ascale.data_ptr(),
-             bscale.data_ptr(),
-             bsz1,
-             b.size(0),
-             a.size(2),
-             bsz1,
-             bscale.size(0),
-             Context::Instance().GetCurrentStream());
-    return torch::narrow(c, 1, 0, bsz_seq);
-}
-
-std::vector<at::Tensor> int8_quantize(at::Tensor& a)
-{
-    unsigned bsz = a.size(0);
-    unsigned _seq_length = a.size(1);
-    int bsz_seq = bsz * _seq_length;
-    int bsz1 = 128;
-    //(bsz_seq >= 32 && bsz_seq < 128)
-    //    ? 128
-    //    : (bsz_seq % 128 == 0)
-    //          ? bsz_seq
-    //          : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
-    //                ? ((bsz_seq % 64 == 0)
-    //                       ? bsz_seq
-    //                       : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
-    //                             ? ((bsz_seq % 32 == 0) ? bsz_seq
-    //                                                    : bsz_seq + (32 - (bsz_seq % 32)))
-    //                             : bsz_seq + (64 - (bsz_seq % 64)))
-    //                : bsz_seq + (128 - (bsz_seq % 128));
-
-    auto options = at::TensorOptions()
-                       .dtype(torch::kInt8)
-                       .layout(at::kStrided)
-                       .device(at::kCUDA)
-                       .requires_grad(false);
-    auto options1 = at::TensorOptions()
-                        .dtype(at::kFloat)
-                        .layout(at::kStrided)
-                        .device(at::kCUDA)
-                        .requires_grad(false);
-    auto c = at::empty({1, bsz1, a.size(2)}, options);
-    auto scale = at::empty({bsz1, 1}, options1);
-
-    launch_me((int8_t*)c.data_ptr(),
-              (float*)scale.data_ptr(),
-              (__half*)a.data_ptr(),
-              a.size(2),
-              bsz_seq,
-              Context::Instance().GetCurrentStream());
-    return {c, scale};
-}
-
-at::Tensor int8_matmul1(at::Tensor& a, at::Tensor& b, at::Tensor& bscale)
-{
-    unsigned bsz = a.size(0);
-    unsigned _seq_length = a.size(1);
-    int bsz_seq = bsz * _seq_length;
-    int bsz1 =
-        (bsz_seq >= 32 && bsz_seq < 128)
-            ? 128
-            : (bsz_seq % 128 == 0)
-                  ? bsz_seq
-                  : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
-                        ? ((bsz_seq % 64 == 0)
-                               ? bsz_seq
-                               : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
-                                     ? ((bsz_seq % 32 == 0) ? bsz_seq
-                                                            : bsz_seq + (32 - (bsz_seq % 32)))
-                                     : bsz_seq + (64 - (bsz_seq % 64)))
-                        : bsz_seq + (128 - (bsz_seq % 128));
-
-    auto options12 = at::TensorOptions()
-                         .dtype(torch::kInt8)
-                         .layout(at::kStrided)
-                         .device(at::kCUDA)
-                         .requires_grad(false);
-    auto options1 = at::TensorOptions()
-                        .dtype(at::kFloat)
-                        .layout(at::kStrided)
-                        .device(at::kCUDA)
-                        .requires_grad(false);
-    auto cc = at::empty({1, bsz1, a.size(2)}, options12);
-    auto scale = at::empty({bsz1, 1}, options1);
-
-    launch_me((int8_t*)cc.data_ptr(),
-              (float*)scale.data_ptr(),
-              (__half*)a.data_ptr(),
-              a.size(2),
-              bsz_seq,
-              Context::Instance().GetCurrentStream());
-    auto options = at::TensorOptions()
-                       .dtype(at::kHalf)
-                       .layout(at::kStrided)
-                       .device(at::kCUDA)
-                       .requires_grad(false);
-    auto c = at::empty({1, bsz1, b.size(0)}, options);
-    run_gemm(cc.data_ptr(),
-             b.data_ptr(),
-             c.data_ptr(),
-             scale.data_ptr(),
-             bscale.data_ptr(),
-             bsz1,
-             b.size(0),
-             a.size(2),
-             bsz1,
-             bscale.size(0),
-             Context::Instance().GetCurrentStream());
-    return torch::narrow(c, 1, 0, bsz_seq);
-}
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
@@ -2198,8 +2372,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("softmax_context_fp16",
           &ds_softmax_context<__half>,
           "DeepSpeed attention with fp32 (CUDA)");
+    m.def("softmax_context_int8",
+          &ds_softmax_context1<__half>,
+          "DeepSpeed attention with fp32 (CUDA)");
     m.def("bias_gelu_fp32", &ds_bias_gelu<float>, "DeepSpeed Gelu with fp32 (CUDA)");
-    m.def("bias_gelu_fp16", &ds_bias_gelu<__half>, "DeepSpeed Gelu with fp32 (CUDA)");
+    m.def("bias_gelu_fp16", &ds_bias_gelu<__half>, "DeepSpeed Gelu with fp16 (CUDA)");
+    m.def("bias_relu_fp32", &ds_bias_relu<float>, "DeepSpeed ReLU with fp32 (CUDA)");
+    m.def("bias_relu_fp16", &ds_bias_relu<__half>, "DeepSpeed ReLU with fp16 (CUDA)");
     m.def("bias_residual_fp32",
           &ds_bias_residual<float>,
           "DeepSpeed residual-bias add with fp32 (CUDA)");
@@ -2242,7 +2421,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("encoder_fp16",
           &TransformerEncoder<__half>,
           "DeepSpeed transformerEncoder with fp16 (CUDA)");
-    m.def("int8_matmul", &int8_matmul, "DeepSpeed vector-MM with fp16 (CUDA)");
-    m.def("int8_matmul1", &int8_matmul1, "DeepSpeed vector-MM with fp16 (CUDA)");
-    m.def("int8_quantize", &int8_quantize, "DeepSpeed vector-MM with fp16 (CUDA)");
 }

@@ -24,10 +24,11 @@ from .runtime.activation_checkpointing import checkpointing
 from .ops.transformer import DeepSpeedTransformerLayer, DeepSpeedTransformerConfig
 from .module_inject import replace_transformer_layer, revert_transformer_layer
 
-from .utils import log_dist
-from .utils.distributed import init_distributed
+from .utils import log_dist, OnDevice
+from .comm.comm import init_distributed
 
 from .runtime import zero
+from .runtime import DeepSpeedOptimizer, ZeROOptimizer
 
 from .pipe import PipelineModule
 
@@ -82,7 +83,7 @@ def initialize(args=None,
         mpu: Optional: A model parallelism unit object that implements
             get_{model,data}_parallel_{rank,group,world_size}()
 
-        dist_init_required: Optional: None will auto-initialize torch.distributed if needed,
+        dist_init_required: Optional: None will auto-initialize torch distributed if needed,
             otherwise the user can force it to be initialized or not via boolean.
 
         collate_fn: Optional: Merges a list of samples to form a
@@ -113,6 +114,10 @@ def initialize(args=None,
         __git_hash__,
         __git_branch__),
              ranks=[0])
+
+    # Disable zero.Init context if it's currently enabled
+    zero.partition_parameters.shutdown_init_context()
+
     assert model is not None, "deepspeed.initialize requires a model"
 
     if not isinstance(model, PipelineModule):
@@ -238,7 +243,8 @@ def init_inference(model,
                    moe_experts=1,
                    moe_type='standard',
                    args=None,
-                   enable_cuda_graph=True,
+                   enable_cuda_graph=False,
+                   save_mp_checkpoint_path=None,
                    enable_qkv_quantization=False):
     """Initialize the DeepSpeed InferenceEngine.
 
@@ -308,6 +314,7 @@ def init_inference(model,
                              moe_type,
                              args,
                              enable_cuda_graph,
+                             save_mp_checkpoint_path,
                              enable_qkv_quantization)
 
     return engine

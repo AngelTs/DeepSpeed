@@ -1,21 +1,15 @@
 '''
 Copyright 2020 The Microsoft DeepSpeed Team
 '''
-import json
-import math
-import importlib
 import torch
 from torch import nn
 from torch.autograd import Function
-import time
 from ... import op_builder
-import torch.nn as nn
-import torch.distributed as dist
 
 # Cuda modules will be imported if needed
 inference_cuda_module = None
 
-from .transformer_inference import DeepSpeedInferenceConfig, DeepSpeedSelfAttention, DeepSpeedMLP
+from .transformer_inference import DeepSpeedSelfAttention, DeepSpeedMLP
 
 
 class DeepSpeedEncoderFunction(Function):
@@ -114,9 +108,17 @@ class DeepSpeedEncoder(nn.Module):
                                 merge_count,
                                 mlp_extra_grouping)
 
-        self.norm_w = nn.Parameter(torch.Tensor(self.config.hidden_size))
-        self.norm_b = nn.Parameter(torch.Tensor(self.config.hidden_size))
-        self.encoder_func = inference_cuda_module.encoder_fp16 if config.fp16 or config.q_int else \
+        data_type = torch.half if config.fp16 else torch.float
+        device = torch.cuda.current_device() if config.bigscience_bloom else 'cpu'
+        self.norm_w = nn.Parameter(
+            torch.empty(self.config.hidden_size,
+                        dtype=data_type,
+                        device=device))
+        self.norm_b = nn.Parameter(
+            torch.empty(self.config.hidden_size,
+                        dtype=data_type,
+                        device=device))
+        self.encoder_func = inference_cuda_module.encoder_fp16 if config.fp16 or config.q_int8 else \
                                     inference_cuda_module.encoder_fp32
         self.attention.norm_factor = (1 / self.attention.norm_factor)**2
 

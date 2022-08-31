@@ -1329,6 +1329,10 @@ __global__ void input_tiled_gemm_kernel(float* output,
                                 sum_g.x += bias_f.x;
                                 sum_g.y += bias_f.y;
                             }
+                            if (add_gelu) {
+                                sum_g.x = gelu(sum_g.x);
+                                sum_g.y = gelu(sum_g.y);
+                            }
                             output_cast[col + (j + t) * output_size] = sum_g;
                         }
                     }

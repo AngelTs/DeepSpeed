@@ -4,7 +4,7 @@
 #define HALF_PRECISION_AVAILABLE = 1
 #include <hip/hip_cooperative_groups.h>
 #else
-#if __CUDA_ARCH__ >= 700
+#if __CUDA_ARCH__ >= 530
 #define HALF_PRECISION_AVAILABLE = 1
 #endif
 #include <cooperative_groups.h>
@@ -22,12 +22,16 @@
 #define MAX_THREADS 1024
 #define MAX_WARP_NUM 32
 #define WARP_SIZE 32
+
+#define MAX_THREADS 1024
 #define SMs 80
 
 #define MAX_REGISTERS 256
 template <typename T>
 void launch_attn_softmax_v2(T* vals,
                             T* mask,
+                            T* alibi,
+                            float layer_scale,
                             bool triangular,
                             bool recompute,
                             bool local_attention,
@@ -36,7 +40,9 @@ void launch_attn_softmax_v2(T* vals,
                             int heads,
                             int num_seq,
                             int sequence_length,
-                            float scale,
+                            int offset,
+                            int mask_stride,
+                            int mp_size,
                             cudaStream_t stream);
 
 template <typename T>
@@ -48,6 +54,15 @@ void launch_bias_gelu(T* input,
                       int intermediate_size,
                       int batch_size,
                       cudaStream_t stream);
+
+// Fused bias add with relu activation
+template <typename T>
+void launch_bias_relu(T* input,
+                      const T* bias,
+                      int intermediate_size,
+                      int batch_size,
+                      cudaStream_t stream);
+
 template <typename T>
 void launch_bias_add(T* input, const T* bias, int hidden_size, int batch_size, cudaStream_t stream);
 
@@ -60,6 +75,7 @@ void launch_bias_residual(T* input,
                           int batch,
                           int hidden_dim,
                           int mp_size,
+                          bool preln,
                           cudaStream_t stream);
 
 template <typename T>
