@@ -1340,16 +1340,16 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
                               bsz,
                               Context::Instance().GetCurrentStream());
         run_gemm(auxilary_buf,
-                      weight_out.data_ptr(),
-                      (T*)output.data_ptr(),
-                      (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
-                      q_scale.data_ptr(),
-                      bsz1,
-                      weight_out.size(0),
-                      out_size,
-                      bsz1,
-                      q_scale.size(0),
-                      Context::Instance().GetCurrentStream());
+                 weight_out.data_ptr(),
+                 (T*)output.data_ptr(),
+                 (float*)((int8_t*)auxilary_buf + bsz1 * out_size),
+                 q_scale.data_ptr(),
+                 bsz1,
+                 weight_out.size(0),
+                 out_size,
+                 bsz1,
+                 q_scale.size(0),
+                 Context::Instance().GetCurrentStream());
     } else {
         if (bsz > 1) {
             float alpha = (T)1.0;
@@ -1634,9 +1634,24 @@ void TransformerEncoder(at::Tensor& input,
 
     int bsz_seq = bsz * _seq_length;
 
-    // 128-aligned
-    int bsz1 = bsz_seq % 128 == 0 ? bsz_seq : (bsz_seq / 128 + 1) * 128;
-
+    int bsz1 = bsz_seq;
+    if(q_bits == 4) {
+        // 128-aligned
+        bsz1 = bsz_seq % 128 == 0 ? bsz_seq : (bsz_seq / 128 + 1) * 128;
+    } else {
+        bsz1 = (bsz_seq >= 32 && bsz_seq < 128)
+            ? 128
+            : (bsz_seq % 128 == 0)
+                  ? bsz_seq
+                  : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
+                        ? ((bsz_seq % 64 == 0)
+                               ? bsz_seq
+                               : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
+                                     ? ((bsz_seq % 32 == 0) ? bsz_seq
+                                                            : bsz_seq + (32 - (bsz_seq % 32)))
+                                     : bsz_seq + (64 - (bsz_seq % 64)))
+                        : bsz_seq + (128 - (bsz_seq % 128));
+    }
     auto aux_buff =
         (T*)Context::Instance().GetWorkSpace() + 8 * input.size(0) * MAX_OUT_TOKES * input.size(2);
     auto aux_buff1 =
@@ -1660,22 +1675,22 @@ void TransformerEncoder(at::Tensor& input,
                           new_stream);
     if (q_int) {
         auto options = at::TensorOptions()
-                            .dtype(input.options().dtype())
-                            .layout(input.options().layout())
-                            .device(input.options().device())
-                            .requires_grad(false);
+                           .dtype(input.options().dtype())
+                           .layout(input.options().layout())
+                           .device(input.options().device())
+                           .requires_grad(false);
         // torch::Tensor a = 0.5 * torch::ones({1, 11, 1024}, input.options());
         // input_ptr = (T*)a.data_ptr();
-        // torch::Tensor b = 119 * torch::ones({attn_weights[0].size(0), attn_weights[0].size(1)/2}, attn_weights[0].options());
-        // T *b_ptr = (T*)b.data_ptr();
-        // torch::Tensor b_scale = 0.125 * torch::ones({q_scale3.size(0)}, attn_weights[0].options());
-        // T *b_scale_ptr = (T*)b_scale.data_ptr();
+        // torch::Tensor b = 119 * torch::ones({attn_weights[0].size(0), attn_weights[0].size(1)/2},
+        // attn_weights[0].options()); T *b_ptr = (T*)b.data_ptr(); torch::Tensor b_scale = 0.125 *
+        // torch::ones({q_scale3.size(0)}, attn_weights[0].options()); T *b_scale_ptr =
+        // (T*)b_scale.data_ptr();
 
-
-        // std::cout << "attn_weights[0][0] = " << attn_weights[0][0] << ", q_scale[0] = " << q_scale3[0] << std::endl;
+        // std::cout << "attn_weights[0][0] = " << attn_weights[0][0] << ", q_scale[0] = " <<
+        // q_scale3[0] << std::endl;
         c10::Half temp[10];
         cudaMemcpy(temp, (c10::Half*)(input_ptr), sizeof(c10::Half) * 10, cudaMemcpyDeviceToHost);
-        std::cout <<"input[0] = " << ((c10::Half*)(temp))[0] << std::endl;
+        std::cout << "input[0] = " << ((c10::Half*)(temp))[0] << std::endl;
 
         int out_size = attn_weights[0].size(0);
         if (q_bits == 8) {
@@ -1703,6 +1718,7 @@ void TransformerEncoder(at::Tensor& input,
             // std::cout << "after int4, buf_1 = " << ((c10::Half*)(buf_11))[0] << std::endl;
         } else {
             assert(q_bits == 4);
+            std::cout << "attn_qkv q_bits == 4" << std::endl;
 
             run_quantize_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
@@ -1714,7 +1730,10 @@ void TransformerEncoder(at::Tensor& input,
             int8_t aux_bufff[10];
             float scale[1];
             cudaMemcpy(aux_bufff, aux_buff, sizeof(int8_t) * 10, cudaMemcpyDeviceToHost);
-            cudaMemcpy(scale, (float*)((int8_t*)aux_buff + bsz1 * input.size(2)), sizeof(float), cudaMemcpyDeviceToHost);
+            cudaMemcpy(scale,
+                       (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                       sizeof(float),
+                       cudaMemcpyDeviceToHost);
 
             run_gemm_int4(aux_buff,
                           attn_weights[0].data_ptr(),
@@ -1858,6 +1877,7 @@ void TransformerEncoder(at::Tensor& input,
                      new_stream);
         } else {
             assert(q_bits == 4);
+            std::cout << "attn_o q_bits == 4" << std::endl;
             run_quantize_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                               (__half*)buf_2,
@@ -1941,6 +1961,8 @@ void TransformerEncoder(at::Tensor& input,
                      new_stream);
         } else {
             assert(q_bits == 4);
+            std::cout << "mlp q_bits == 4" << std::endl;
+
             run_quantize_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                               (__half*)buf_4,
@@ -1967,16 +1989,16 @@ void TransformerEncoder(at::Tensor& input,
                                   bsz_seq,
                                   Context::Instance().GetCurrentStream());
             run_gemm_int4(aux_buff,
-                     mlp_weights[1].data_ptr(),
-                     (T*)buf_5,
-                     (float*)((int8_t*)aux_buff + bsz1 * out_size),
-                     q_scale.data_ptr(),
-                     bsz1,
-                     mlp_weights[1].size(0),
-                     out_size,
-                     bsz1,
-                     q_scale.size(0),
-                     new_stream);
+                          mlp_weights[1].data_ptr(),
+                          (T*)buf_5,
+                          (float*)((int8_t*)aux_buff + bsz1 * out_size),
+                          q_scale.data_ptr(),
+                          bsz1,
+                          mlp_weights[1].size(0),
+                          out_size,
+                          bsz1,
+                          q_scale.size(0),
+                          new_stream);
         }
     } else {
         cublas_gemm_ex(cub_handle,

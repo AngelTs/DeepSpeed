@@ -256,7 +256,6 @@ def replace_transformer_layer(orig_layer_impl,
             policy = policy_cls(child, inference=inference, preln=preln)
         else:
             policy = policy_cls(child, inference=inference)
-
         if inference:
             hidden_size, num_attention_heads = policy.get_hidden_heads()
             assert num_attention_heads % mp_size == 0,\
@@ -307,7 +306,17 @@ def replace_transformer_layer(orig_layer_impl,
             _res_coef = _res_coef.half()
 
         mp_replace = ReplaceWithTensorSlicing(mp_group=mp_group)
-        quantizer = GroupQuantizer(q_int=quantize, num_bits=quantize_bits)
+        if quantize_settings is not None:
+            (quantization_scales,
+                merge_count,
+                mlp_extra_grouping,
+                quantize_groups) = quantize_settings
+        else:
+            quantization_scales = None
+            merge_count = 1
+            mlp_extra_grouping = 1
+            quantize_groups = 1
+        quantizer = GroupQuantizer(q_int=quantize, num_bits=quantize_bits, num_groups=quantize_groups)
         #expert_mp_replace = ReplaceWithTensorSlicing(mp_group=expert_mp_group)
 
         if inference:
@@ -347,7 +356,7 @@ def replace_transformer_layer(orig_layer_impl,
                     mp_size=mp_size,
                     q_int=quantize,
                     q_bits=quantize_bits,
-                    return_tuple=(return_tuple or (policy_cls is HFBertLayerPolicy)),
+                    return_tuple=return_tuple,
                     triangular_masking=(policy_cls is not HFBertLayerPolicy
                                         and policy_cls is not HFDistilBertLayerPolicy),
                     local_attention=((config.attention_layers[layer_id] == "local")
@@ -361,10 +370,6 @@ def replace_transformer_layer(orig_layer_impl,
                     enable_qkv_quantization=enable_qkv_quantization)
 
             if quantize and quantize_settings is not None:
-                (quantization_scales,
-                 merge_count,
-                 mlp_extra_grouping,
-                 quantize_groups) = quantize_settings
                 if moe:
                     new_module = transformer_inference.DeepSpeedMoEInference(
                         transformer_config,
@@ -382,7 +387,10 @@ def replace_transformer_layer(orig_layer_impl,
                     if (policy_cls is HFBertLayerPolicy
                             or policy_cls is HFDistilBertLayerPolicy):
                         new_module = transformer_inference.DeepSpeedEncoder(
-                            transformer_config)
+                            transformer_config,
+                            mp_group=mp_group,
+                            quantize_groups=quantize_groups,
+                            merge_count=merge_count)
                     else:
                         new_module = transformer_inference.DeepSpeedTransformerInference(
                             transformer_config,
@@ -495,7 +503,7 @@ def replace_transformer_layer(orig_layer_impl,
                 _res_coef.data = transpose(_res_coef.data)
 
             attn_block = new_module.attention
-            attn_block.attn_qkvw = quantizer.quantize(qkvw, force_int8=False) if quantize else qkvw
+            attn_block.attn_qkvw = quantizer.quantize(qkvw, force_int8=False)
             attn_block.attn_qkvb = mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
             attn_block.attn_ow = quantizer.quantize(dense_w, force_int8=False)
@@ -829,6 +837,7 @@ def _replace_module(model, policies, layer_id=0):
             replaced_module = policies[child.__class__][0](child,
                                                            policies[child.__class__][-1],
                                                            layer_id)
+
             setattr(model, name, replaced_module)
             if isinstance(model, PipelineModule):
                 assert hasattr(model, 'forward_funcs'),\
