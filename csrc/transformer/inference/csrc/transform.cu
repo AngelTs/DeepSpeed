@@ -212,10 +212,14 @@ void launch_transform_scale<__half>(__half* vals,
 // TODO: Reza fix this up after rebase, sync definition w. public master that includes k/v cache,
 // etc.
 __global__ void bias_add_transform_0213(float* output,
+                                        float* k_cache,
+                                        float* v_cache,
                                         const float* vals,
                                         const float* bias,
                                         int hidden_dim,
                                         int seq_length,
+                                        unsigned seq_offset,
+                                        int all_tokens,
                                         int heads,
                                         int head_ext)
 
@@ -227,7 +231,6 @@ __global__ void bias_add_transform_0213(float* output,
     int d0_out_stride = d0_stride;
     int d1_out_stride = d2_stride;
     // int d2_out_stride = d2_stride * seq_length;
-    int d2_out_stride = d2_stride * seq_length;
 
     int d0 = blockIdx.x;                                                  // Batch
     int d1 = blockIdx.y;                                                  // Sequence ID (0-127)
@@ -235,22 +238,16 @@ __global__ void bias_add_transform_0213(float* output,
     int d2 = threadIdx.y + (blockIdx.z % head_ext) * (heads / head_ext);  // Head (0-11)
     int d3 = threadIdx.x;                                                 // Values (groups of 4)
 
+    int d2_out_stride = d2_stride * (cnt == 0 ? seq_length : MAX_OUT_TOKES);
     const float4* vals_vec = reinterpret_cast<const float4*>(vals);
     const float4* bias_vec = reinterpret_cast<const float4*>(bias);
-    float4* output_vec = reinterpret_cast<float4*>(output);
+    float4* output_vec =
+        reinterpret_cast<float4*>(cnt == 0 ? output : (cnt == 1 ? k_cache : v_cache));
 
     float4 inputs = vals_vec[d0 * d0_stride * (gridDim.z / head_ext) + cnt * d1_stride +
                              d1 * d1_stride * (gridDim.z / head_ext) + d2 * d2_stride + d3];
-    float4 biases = bias_vec[cnt * d1_stride + d2 * d2_stride + d3];
 
-    float4 outputs;
-    outputs.x = inputs.x + biases.x;
-    outputs.y = inputs.y + biases.y;
-    outputs.z = inputs.z + biases.z;
-    outputs.w = inputs.w + biases.w;
-
-    output_vec[cnt * d0_out_stride * gridDim.x + d0 * d0_out_stride + d1 * d1_out_stride +
-               d2 * d2_out_stride + d3] = outputs;
+    output_vec[d0 * d0_out_stride + d1 * d1_out_stride + d2 * d2_out_stride + d3] = inputs;
 }
 
 #define ATTN_H 3
@@ -322,68 +319,6 @@ __global__ void bias_add_transform_0213(__half* output,  // q
                 q_h[o].y = (__half)(q_data[0] * sinf(inv_freq) + q_data[1] * cosf(inv_freq));
             }
         }
-        // else{
-        //    float4 q = vals_vec[d3];
-        //    float4 q_rot;
-        //    __half2* q_h = reinterpret_cast<__half2*>(&q);
-        //    {
-        //        __half2* qrot_h = reinterpret_cast<__half2*>(&q_rot);
-        //        #pragma unroll
-        //        for (int o = 0;o < 4;o++){
-        //            int index = ((d3 << 2) + o) * 2;
-        //            float rotary_sign = (index > (half_dim - 1) ? -1.0 : 1.0);
-        //            qrot_h[o].x = __float2half((float)q_h[o].x * rotary_sign);
-        //            qrot_h[o].y = __float2half((float)q_h[o].y * rotary_sign);
-        //        }
-        //    }
-        //    __half2* qrot_h = reinterpret_cast<__half2*>(&q_rot);
-        //    {
-        //        float4 q_rot_tmp;
-        //        float4 q_rot_tmp1;
-        //        {
-        //            q_rot_tmp.x = __shfl_sync(0xffffffff, q_rot.x, 1);
-        //            q_rot_tmp.y = __shfl_sync(0xffffffff, q_rot.y, 1);
-        //            q_rot_tmp.z = __shfl_sync(0xffffffff, q_rot.z, 1);
-        //            q_rot_tmp.w = __shfl_sync(0xffffffff, q_rot.w, 1);
-        //        }
-        //
-        //        if(lane < 2){
-        //            q_rot_tmp.x = __shfl_xor_sync(0xffffffff, q_rot.x, 1);
-        //            q_rot_tmp.y = __shfl_xor_sync(0xffffffff, q_rot.y, 1);
-        //            q_rot_tmp.z = __shfl_xor_sync(0xffffffff, q_rot.z, 1);
-        //            q_rot_tmp.w = __shfl_xor_sync(0xffffffff, q_rot.w, 1);
-        //        }
-        //
-        //        {
-        //            q_rot_tmp1.x = __shfl_sync(0xffffffff, q_rot.x, 2);
-        //            q_rot_tmp1.y = __shfl_sync(0xffffffff, q_rot.y, 2);
-        //            q_rot_tmp1.z = __shfl_sync(0xffffffff, q_rot.z, 2);
-        //            q_rot_tmp1.w = __shfl_sync(0xffffffff, q_rot.w, 2);
-        //        }
-        //        if (lane %2 == 0){
-        //            q_rot_tmp1.x = __shfl_xor_sync(0xffffffff, q_rot.x, 2);
-        //            q_rot_tmp1.y = __shfl_xor_sync(0xffffffff, q_rot.y, 2);
-        //            q_rot_tmp1.z = __shfl_xor_sync(0xffffffff, q_rot.z, 2);
-        //            q_rot_tmp1.w = __shfl_xor_sync(0xffffffff, q_rot.w, 2);
-        //        }
-        //        q_rot.x = (lane < 1) ? q_rot_tmp.z : q_rot_tmp1.z;
-        //        q_rot.y = (lane < 1) ? q_rot_tmp.w : q_rot_tmp1.w;
-        //        q_rot.z = (lane > 0) ? q_rot_tmp.x : q_rot_tmp1.x;
-        //        q_rot.w = (lane > 0) ? q_rot_tmp.y : q_rot_tmp1.y;
-        //    }
-        //    #pragma unroll
-        //    for (int o = 0;o < 4;o++){
-        //        int index = ((d3 << 2) + o) * 2;
-        //        float inv_freq[2];
-        //        inv_freq[0] = (float)((index % half_dim) * 2) / (float)(rotary_dim << 3);
-        //        inv_freq[1] = (float)(((index+1) % half_dim) * 2) / (float)(rotary_dim << 3);
-        //        inv_freq[0] = 1.0 / powf(10000.0, inv_freq[0]) * (float)seq_id;
-        //        inv_freq[1] = 1.0 / powf(10000.0, inv_freq[1]) * (float)seq_id;
-        //        q_h[o].x = (__half)((float)qrot_h[o].x * sinf(inv_freq[0]) + (float)q_h[o].x *
-        //        cosf(inv_freq[0])); q_h[o].y = (__half)((float)qrot_h[o].y * sinf(inv_freq[1]) +
-        //        (float)q_h[o].y * cosf(inv_freq[1]));
-        //    }
-        //}
         output_vec[d3] = q;
     } else
         output_vec[d3] = vals_vec[d3];
@@ -416,8 +351,17 @@ void launch_bias_add_transform_0213<float>(float* output,
     dim3 block_dim(hidden_dim / heads, (heads / head_ext));
     dim3 grid_dim(batch_size, seq_length, (trans_count * head_ext));
 
-    bias_add_transform_0213<<<grid_dim, block_dim, 0, stream>>>(
-        output, vals, bias, hidden_dim, seq_length, heads, head_ext);
+    bias_add_transform_0213<<<grid_dim, block_dim, 0, stream>>>(output,
+                                                                k_cache,
+                                                                v_cache,
+                                                                vals,
+                                                                bias,
+                                                                hidden_dim,
+                                                                seq_length,
+                                                                seq_offset,
+                                                                all_tokens,
+                                                                heads,
+                                                                head_ext);
 }
 
 template <>
