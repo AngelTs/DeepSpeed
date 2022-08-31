@@ -105,6 +105,7 @@ class DeepSpeedInferenceConfig(TransformerConfig):
         self.training_mp_size = training_mp_size
         self.bigscience_bloom = bigscience_bloom
         self.enable_qkv_quantization = enable_qkv_quantization
+        self.q_bits = q_bits
 
     @classmethod
     def from_dict(cls, json_object):
@@ -144,7 +145,6 @@ class DeepSpeedSelfAttentionFunction(Function):
                 mp_group,
                 q_scales,
                 q_groups,
-                q_bits,
                 merge_count,
                 qkv_merging,
                 score_context_func,
@@ -331,7 +331,8 @@ class DeepSpeedSelfAttentionFunction(Function):
                                       DeepSpeedTransformerInference.layer_id,
                                       config.bigscience_bloom,
                                       config.mp_size,
-                                      config.enable_qkv_quantization)
+                                      config.enable_qkv_quantization,
+                                      config.q_bits)
             else:
                 qkv_out = qkv_func(input,
                                    attn_qkvw,
@@ -344,7 +345,8 @@ class DeepSpeedSelfAttentionFunction(Function):
                                    DeepSpeedTransformerInference.layer_id,
                                    config.bigscience_bloom,
                                    config.mp_size,
-                                   config.enable_qkv_quantization)
+                                   config.enable_qkv_quantization,
+                                   config.q_bits)
 
             context_layer, key_layer, value_layer = compute_attention(qkv_out[0] if isinstance(qkv_out, list) else qkv_out, input_mask)
 
