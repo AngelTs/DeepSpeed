@@ -9,6 +9,7 @@
 #include "cuda.h"
 
 #define MEGABYTE (1024 * 1024)
+#define GIGABYTE (1024 * 1024 * 1024)
 
 #define WARP_SIZE 32
 
