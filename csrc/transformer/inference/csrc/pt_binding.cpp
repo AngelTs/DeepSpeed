@@ -1169,7 +1169,7 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
     T* workspace = (T*)Context::Instance().GetWorkSpace() +
                    (5 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2));
 
-    int out_size = q_int8 ? weight.size(0) : weight.size(1);
+    int out_size = q_int ? weight.size(0) : weight.size(1);
     auto output = torch::from_blob(workspace, {input.size(0), input.size(1), out_size}, options);
     int bsz = input.size(0) * input.size(1);
     if (q_int) {

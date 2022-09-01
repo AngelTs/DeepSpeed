@@ -581,13 +581,13 @@ def replace_transformer_layer(orig_layer_impl,
                         attn_block.attn_qkvw = mp_replace.copy(
                             attn_block.attn_qkvw,
                             quantizer.quantize(qkvw,
-                                               qkv=enable_qkv_quantization))
+                                               qkv=enable_qkv_quantization, force_int8=False))
                         attn_block.attn_qkvb = mp_replace.copy(
                             attn_block.attn_qkvb,
                             qkvb)
 
                         attn_block.attn_ow = mp_replace.copy(attn_block.attn_ow,
-                                                             quantizer.quantize(dense_w))
+                                                             quantizer.quantize(dense_w, force_int8=False))
                         attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
             else:
                 if bigscience_bloom:
@@ -645,7 +645,6 @@ def replace_transformer_layer(orig_layer_impl,
                                                  _4hh_w,
                                                  _4hh_b],
                                                 modifier_rank=0):
-                                  _4hh_w), force_int8=False)
                             mpl_block.inter_w = mp_replace.copy(
                                 mpl_block.inter_w,
                                 quantizer.quantize(_h4h_w, force_int8=False))
