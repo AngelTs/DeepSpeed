@@ -836,7 +836,6 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
     ds_layernorm_internal<T>(workspace, input, gamma, beta, epsilon);
     if (q_int) {
         int out_size = weight.size(0);
-
         int bsz1 = bsz;
         if(q_bits == 4) {
             // 128-aligned
@@ -855,7 +854,6 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
                                    : bsz + (128 - (bsz % 128));
 
         }
-
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                     8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
@@ -959,8 +957,7 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
                                     unsigned q_bits)
 {
     int bsz = input.size(0) * input.size(1);
-    int out_size = weight.size(1);
-
+    int out_size = q_int ? weight.size(0) : weight.size(1);
     T* workspace = (T*)Context::Instance().GetWorkSpace();
     if (!workspace)
         cublasSetStream(Context::Instance().GetCublasHandle(),
@@ -1076,7 +1073,6 @@ at::Tensor ds_linear_layer(at::Tensor& input,
                                    : bsz + (128 - (bsz % 128));
 
         }
-
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
@@ -1172,8 +1168,9 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
                        .requires_grad(false);
     T* workspace = (T*)Context::Instance().GetWorkSpace() +
                    (5 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2));
-    auto output =
-        torch::from_blob(workspace, {input.size(0), input.size(1), weight.size(1)}, options);
+
+    int out_size = q_int8 ? weight.size(0) : weight.size(1);
+    auto output = torch::from_blob(workspace, {input.size(0), input.size(1), out_size}, options);
     int bsz = input.size(0) * input.size(1);
     if (q_int) {
         int out_size = weight.size(0);
@@ -1950,7 +1947,6 @@ void TransformerEncoder(at::Tensor& input,
     T* buf_5 = buf_4 + small_buf_size;      // 1
 
     int bsz_seq = bsz * _seq_length;
-
     int bsz1 = bsz_seq;
     if(q_bits == 4) {
         // 128-aligned
@@ -1973,10 +1969,11 @@ void TransformerEncoder(at::Tensor& input,
     auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                     8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
+    auto aux_buff1 = (T*)Context::Instance().GetWorkSpace() +
+                    12 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
+
     auto aux_bufff = (T*)Context::Instance().GetWorkSpace() +
                     16 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
-
-
 
     T* input_ptr = (T*)input.data_ptr();
     float alpha = (T)1.0;
@@ -2287,7 +2284,6 @@ void TransformerEncoder(at::Tensor& input,
         } else {
             assert(q_bits == 4);
             std::cout << "mlp q_bits == 4" << std::endl;
-
             run_quantize_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                               (__half*)buf_4,
@@ -2297,7 +2293,7 @@ void TransformerEncoder(at::Tensor& input,
 
             run_gemm_int4(aux_buff,
                         mlp_weights[0].data_ptr(),
-                        buf_0,
+                        aux_buff1,
                         (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                         q_scale1.data_ptr(),
                         bsz1,
@@ -2309,7 +2305,7 @@ void TransformerEncoder(at::Tensor& input,
 
             launch_bias_gelu_int4((int8_t*)aux_buff,
                                 (float*)((int8_t*)aux_buff + bsz1 * out_size),
-                                (__half*)buf_0,
+                                (__half*)aux_buff1,
                                 (__half*)mlp_biases[0].data_ptr(),
                                 out_size,
                                 bsz_seq,

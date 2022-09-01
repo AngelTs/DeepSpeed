@@ -66,11 +66,8 @@ class GroupQuantizer:
         scale = torch.max(input_min.abs(), input_max.abs()) * 2.0 / (q_range)
         input_flat = (input_flat / scale).round().clamp(-q_range // 2, q_range // 2 - 1)
         inputs_q = input_flat.reshape(inputs.shape).to(torch.int8).contiguous()
-
         if num_bits==4:
             inputs_q = packInt4(inputs_q)
-
-        # print("inputs_q", inputs_q.shape, "inputs_q[0]", inputs_q[0], "scale[0]", scale[0])
         out = torch.nn.Parameter(inputs_q, requires_grad=False)
         out.scale = scale
         return out
@@ -97,18 +94,19 @@ class ReplaceWithTensorSlicing:
             return src
         src_shape = src.shape
         dst_shape = dst.shape
+        inner_dim = 1 if src.dtype == torch.int8 else 0
+        outer_dim = 0 if src.dtype == torch.int8 else 1
         if self.out_dim == 0:
             src_split = torch.split(src.data,
-                                    src_shape[self.out_dim] // self.mp_size,
+                                    src_shape[outer_dim] // self.mp_size,
                                     dim=0)
         else:
             src_split = torch.split(src.data, src.shape[-1] // 3, dim=-1)
-
         if (len(src_shape) == 2 and len(dst_shape) == 2):
-            if src_shape[self.out_dim] == dst_shape[self.out_dim]:
-                return torch.nn.parameter.Parameter(src)
-            if self.out_dim == 1:
-                self.merge_assert(src_shape[self.out_dim], dst_shape[self.out_dim])
+            if src_shape[outer_dim] == dst_shape[self.out_dim]:
+                dst = src
+            elif self.out_dim == 1:
+                self.merge_assert(src_shape[outer_dim], dst_shape[self.out_dim])
                 qkv_size = dst_shape[self.out_dim] // 3
                 qkv_split = [
                     torch.split(src_s,
@@ -120,65 +118,73 @@ class ReplaceWithTensorSlicing:
                     torch.cat([qkv_s[i] for qkv_s in qkv_split],
                               axis=self.out_dim) for i in range(len(qkv_split[0]))
                 ]
-                dst.data.copy_(weight_split[self.gpu_index].to(
-                    torch.cuda.current_device()).contiguous())
+                dst = weight_split[self.gpu_index].to(
+                    torch.cuda.current_device()).contiguous()
             else:
-                dst.data.copy_(src_split[self.gpu_index].to(
-                    torch.cuda.current_device()).contiguous())
+                dst = src_split[self.gpu_index].to(
+                    torch.cuda.current_device()).contiguous()
         else:
             if src_shape[0] == dst_shape[0]:
-                return torch.nn.parameter.Parameter(src)
-            if self.out_dim == 1:
+                dst = src
+            elif self.out_dim == 1:
                 qkv_size = dst_shape[0] // 3
                 qkv_split = [torch.split(src_s, qkv_size, dim=0) for src_s in src_split]
                 bias_split = [
                     torch.cat([qkv_s[i] for qkv_s in qkv_split],
                               axis=0) for i in range(len(qkv_split[0]))
                 ]
-                dst.data.copy_(bias_split[self.gpu_index].to(
-                    torch.cuda.current_device()).contiguous())
+                dst = bias_split[self.gpu_index].to(
+                    torch.cuda.current_device()).contiguous()
             else:
-                dst.data.copy_(src_split[self.gpu_index].to(
-                    torch.cuda.current_device()).contiguous())
+                dst = src_split[self.gpu_index].to(
+                    torch.cuda.current_device()).contiguous()
 
-        return torch.nn.parameter.Parameter(dst)
+        ret = torch.nn.parameter.Parameter(dst, requires_grad=False)
+        if hasattr(src, 'scale'):
+            ret.scale = src.scale
+        return ret
 
     def copy(self, dst, src):
         if src is None:
             return src
 
+        inner_dim = 1 if src.dtype == torch.int8 else 0
+        outer_dim = 0 if src.dtype == torch.int8 else 1
         src_shape = src.shape
         dst_shape = dst.shape
         if (len(src_shape) == 2 and len(dst_shape) == 2):
-
-            if src_shape[0] == dst_shape[0] and src_shape[1] == dst_shape[1]:
-                dst.data.copy_(src)
+            if src_shape[inner_dim] == dst_shape[
+                    self.in_dim] and src_shape[outer_dim] == dst_shape[self.out_dim]:
+                dst = src
             else:
-                if src_shape[self.in_dim] != dst_shape[self.in_dim]:
-                    self.merge_assert(src_shape[self.in_dim], dst_shape[self.in_dim])
+                if src_shape[inner_dim] != dst_shape[self.in_dim]:
+                    self.merge_assert(src_shape[inner_dim], dst_shape[self.in_dim])
                     weight_split = torch.split(
                         src,
                         dst_shape[self.in_dim],
                         dim=self.in_dim)[self.gpu_index].to(
                             torch.cuda.current_device()).contiguous()
                 else:
-                    self.merge_assert(src_shape[self.out_dim], dst_shape[self.out_dim])
+                    self.merge_assert(src_shape[outer_dim], dst_shape[self.out_dim])
                     weight_split = torch.split(
                         src.data,
                         dst_shape[self.out_dim],
                         dim=self.out_dim)[self.gpu_index].to(
                             torch.cuda.current_device()).contiguous()
-                dst.data.copy_(weight_split.contiguous())
+                dst = weight_split.contiguous()
         else:
             if src_shape[0] == dst_shape[0]:
-                dst.data.copy_(src)
+                dst = src
             else:
                 bias_split = torch.split(src.data,
                                          dst_shape[-1])[self.gpu_index].to(
                                              torch.cuda.current_device()).contiguous()
-                dst.data.copy_(bias_split)
+                dst = bias_split
 
-        return torch.nn.parameter.Parameter(dst, requires_grad=False)
+        ret = torch.nn.parameter.Parameter(dst, requires_grad=False)
+        if hasattr(src, 'scale'):
+            ret.scale = src.scale
+        return ret
 
 
 def get_transformer_name(replaced_module):
@@ -475,13 +481,21 @@ def replace_transformer_layer(orig_layer_impl,
                                                  qkvb,
                                                  dense_b],
                                                 modifier_rank=0):
-                            qkvw = transpose(qkvw.data)
-                            dense_w = transpose(dense_w.data)
+                            if not enable_qkv_quantization:
+                                qkvw.data = transpose(qkvw.data)
+                            if not quantize:
+                                dense_w = transpose(dense_w.data)
                             qkvb = qkvb.data
                             dense_b = dense_b.data
                 else:
-                    qkvw.data = transpose(qkvw.data)
-                    dense_w.data = transpose(dense_w.data)
+                    if not enable_qkv_quantization:
+                        qkvw.data = transpose(qkvw.data)
+                    if not quantize:
+                        dense_w.data = transpose(dense_w.data)
+            elif quantize:
+                qkvw.data = transpose(
+                    qkvw.data) if enable_qkv_quantization else qkvw.data
+                dense_w.data = transpose(dense_w.data)
 
             def _transpose(x):
                 num_attention_heads_per_partition = transformer_config.heads // transformer_config.mp_size
@@ -530,15 +544,22 @@ def replace_transformer_layer(orig_layer_impl,
                                                  _4hh_b,
                                                  _h4h_b],
                                                 modifier_rank=0):
-                            _h4h_w = transpose(_h4h_w.data)
-                            _4hh_w = transpose(_4hh_w.data)
+                            if not quantize:
+                                _h4h_w = transpose(_h4h_w.data)
+                                _4hh_w = transpose(_4hh_w.data)
                             _h4h_b = _h4h_b.data
                             _4hh_b = _4hh_b.data
                 else:
-                    _h4h_w = [transpose(moe_w1.data)
-                              for moe_w1 in _h4h_w] if moe else transpose(_h4h_w.data)
-                    _4hh_w = [transpose(moe_w1.data)
-                              for moe_w1 in _4hh_w] if moe else transpose(_4hh_w.data)
+                    if not quantize:
+                        _h4h_w = [transpose(moe_w1.data) for moe_w1 in _h4h_w
+                                  ] if moe else transpose(_h4h_w.data)
+                        _4hh_w = [transpose(moe_w1.data) for moe_w1 in _4hh_w
+                                  ] if moe else transpose(_4hh_w.data)
+            elif quantize:
+                _h4h_w = [transpose(moe_w1.data)
+                          for moe_w1 in _h4h_w] if moe else transpose(_h4h_w.data)
+                _4hh_w = [transpose(moe_w1.data)
+                          for moe_w1 in _4hh_w] if moe else transpose(_4hh_w.data)
 
             if moe and moe_type == 'residual':
                 _res_h4h_w.data = transpose(_res_h4h_w.data)
@@ -559,30 +580,30 @@ def replace_transformer_layer(orig_layer_impl,
                                             modifier_rank=0):
                         attn_block.attn_qkvw = mp_replace.copy(
                             attn_block.attn_qkvw,
-                            qkvw)
+                            quantizer.quantize(qkvw,
+                                               qkv=enable_qkv_quantization))
                         attn_block.attn_qkvb = mp_replace.copy(
                             attn_block.attn_qkvb,
                             qkvb)
 
-                        attn_block.attn_ow = mp_replace.copy(attn_block.attn_ow, dense_w)
+                        attn_block.attn_ow = mp_replace.copy(attn_block.attn_ow,
+                                                             quantizer.quantize(dense_w))
                         attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
             else:
                 if bigscience_bloom:
                     attn_block.attn_qkvw = mp_replace.copy(attn_block.attn_qkvw, qkvw)
                     attn_block.attn_qkvb = mp_replace.copy(attn_block.attn_qkvb, qkvb)
                 else:
-                    attn_block.attn_qkvw = quantizer.quantize(qkvw,)
-
-                    attn_block.attn_qkvw = quantizer.quantize(
-                        mp_replace.qkv_copy(attn_block.attn_qkvw,
-                                            qkvw), force_int8=False)
+                    attn_block.attn_qkvw = mp_replace.qkv_copy(
+                        attn_block.attn_qkvw,
+                        quantizer.quantize(qkvw,
+                                           qkv=enable_qkv_quantization, force_int8=False))
                     attn_block.attn_qkvb = mp_replace.qkv_copy(
                         attn_block.attn_qkvb,
                         qkvb)
 
-                attn_block.attn_ow = quantizer.quantize(
-                    mp_replace.copy(attn_block.attn_ow,
-                                    dense_w), force_int8=False)
+                attn_block.attn_ow = mp_replace.copy(attn_block.attn_ow,
+                                                     quantizer.quantize(dense_w, force_int8=False))
                 attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
 
             if moe:
@@ -624,26 +645,25 @@ def replace_transformer_layer(orig_layer_impl,
                                                  _4hh_w,
                                                  _4hh_b],
                                                 modifier_rank=0):
-                            mpl_block.inter_w = quantizer.quantize(
-                                mp_replace.copy(mpl_block.inter_w,
-                                                _h4h_w), force_int8=False)
+                                  _4hh_w), force_int8=False)
+                            mpl_block.inter_w = mp_replace.copy(
+                                mpl_block.inter_w,
+                                quantizer.quantize(_h4h_w, force_int8=False))
                             mpl_block.inter_b = mp_replace.copy(
                                 mpl_block.inter_b,
                                 _h4h_b)
-                            mpl_block.output_w = quantizer.quantize(
-                                mp_replace.copy(mpl_block.output_w,
-                                                _4hh_w), force_int8=False)
+                            mpl_block.output_w = mp_replace.copy(
+                                mpl_block.output_w,
+                                quantizer.quantize(_4hh_w, force_int8=False))
                             mpl_block.output_b = mp_replace.copy(
                                 mpl_block.output_b,
                                 _4hh_b)
                 else:
-                    mpl_block.inter_w = quantizer.quantize(
-                        mp_replace.copy(mpl_block.inter_w,
-                                        _h4h_w), force_int8=False)
+                    mpl_block.inter_w = mp_replace.copy(mpl_block.inter_w,
+                                                        quantizer.quantize(_h4h_w, force_int8=False))
                     mpl_block.inter_b = mp_replace.copy(mpl_block.inter_b, _h4h_b)
-                    mpl_block.output_w = quantizer.quantize(
-                        mp_replace.copy(mpl_block.output_w,
-                                        _4hh_w), force_int8=False)
+                    mpl_block.output_w = mp_replace.copy(mpl_block.output_w,
+                                                         quantizer.quantize(_4hh_w, force_int8=False))
                     mpl_block.output_b = mp_replace.copy(mpl_block.output_b, _4hh_b)
 
                 if attn_nw is None:
