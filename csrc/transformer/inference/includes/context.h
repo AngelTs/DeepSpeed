@@ -82,15 +82,12 @@ public:
                              const size_t& elem_size)
     {
         size_t total_size = 0;
-        if (!_free_memory_size) {
-            cudaMemGetInfo(&_free_memory_size, &total_size);
-            //_free_memory_size = 16000000000 - (total_size - _free_memory_size);
-        }
+        if (!_free_memory_size) { cudaMemGetInfo(&_free_memory_size, &total_size); }
         size_t activation_size = 16 * hidden_dim * batch_size;
         size_t cache_size = num_layers * batch_size * (hidden_dim / mp_size) * 2;
-        _max_seq_len =
-            (((_free_memory_size - 200 * MEGABYTE) / elem_size)) / (activation_size + cache_size);
-        if (total_size) 
+        assert(_free_memory_size > 100 * MEGABYTE) _max_seq_len =
+            (((_free_memory_size - 100 * MEGABYTE) / elem_size)) / (activation_size + cache_size);
+        if (total_size)
             printf(
                 "Free memory : %lu (Bytes)  Total memory: %lu (Bytes)  Setting maximum total "
                 "tokens (input + output) to %lu \n",
