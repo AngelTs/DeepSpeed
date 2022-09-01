@@ -388,8 +388,9 @@ class DeepSpeedSelfAttention(nn.Module):
         self.config.layer_id = DeepSpeedSelfAttention.num_layers
         DeepSpeedSelfAttention.num_layers = DeepSpeedSelfAttention.num_layers + 1
         device = torch.cuda.current_device() if config.bigscience_bloom else 'cpu'
+        half_size = (config.q_int and config.q_bits == 4)
         self.attn_qkvw = nn.Parameter(
-            torch.empty(self.config.hidden_size,
+            torch.empty(self.config.hidden_size // 2 if half_size and config.enable_qkv_quantization else self.config.hidden_size,
                         (self.config.hidden_size // self.config.mp_size) * 3,
                         dtype=data_type,
                         device=device))
@@ -399,11 +400,10 @@ class DeepSpeedSelfAttention(nn.Module):
                         device=device))
 
         self.attn_ow = nn.Parameter(
-            torch.empty(self.config.hidden_size // self.config.mp_size,
+            torch.empty((self.config.hidden_size // self.config.mp_size // 2) if half_size else (self.config.hidden_size // self.config.mp_size),
                         self.config.hidden_size,
                         dtype=data_type,
                         device=device))
-
         self.attn_ob = nn.Parameter(
             torch.empty(self.config.hidden_size,
                         dtype=data_type,
@@ -571,6 +571,7 @@ class DeepSpeedMLP(nn.Module):
         self.config = config
         data_type = torch.half if config.fp16 else torch.float
         device = torch.cuda.current_device() if config.bigscience_bloom else 'cpu'
+        half_size = (config.q_int and config.q_bits == 4)
         self.attn_nw = nn.Parameter(
             torch.empty(self.config.hidden_size,
                         dtype=data_type,
@@ -580,7 +581,7 @@ class DeepSpeedMLP(nn.Module):
                         dtype=data_type,
                         device=device))
         self.inter_w = nn.Parameter(
-            torch.empty(self.config.hidden_size,
+            torch.empty(self.config.hidden_size // 2 if half_size else self.config.hidden_size,
                         self.config.intermediate_size // self.config.mp_size,
                         dtype=data_type,
                         device=device))
@@ -589,7 +590,7 @@ class DeepSpeedMLP(nn.Module):
                         dtype=data_type,
                         device=device))
         self.output_w = nn.Parameter(
-            torch.empty((self.config.intermediate_size // self.config.mp_size),
+            torch.empty((self.config.intermediate_size // self.config.mp_size // 2) if half_size else (self.config.intermediate_size // self.config.mp_size),
                         self.config.hidden_size,
                         dtype=data_type,
                         device=device))

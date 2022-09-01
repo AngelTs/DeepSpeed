@@ -89,13 +89,13 @@ class ReplaceWithTensorSlicing:
             for merging your checkpoints before replacing the transformer layer with\
             inference-kernels'
 
-    def qkv_copy(self, dst, src):
+    def qkv_copy(self, dst, src, q_int=False):
         if src is None:
             return src
         src_shape = src.shape
         dst_shape = dst.shape
-        inner_dim = 1 if src.dtype == torch.int8 else 0
-        outer_dim = 0 if src.dtype == torch.int8 else 1
+        inner_dim = 1 if q_int else 0
+        outer_dim = 0 if q_int else 1
         if self.out_dim == 0:
             src_split = torch.split(src.data,
                                     src_shape[outer_dim] // self.mp_size,
@@ -144,12 +144,12 @@ class ReplaceWithTensorSlicing:
             ret.scale = src.scale
         return ret
 
-    def copy(self, dst, src):
+    def copy(self, dst, src, q_int=False):
         if src is None:
             return src
 
-        inner_dim = 1 if src.dtype == torch.int8 else 0
-        outer_dim = 0 if src.dtype == torch.int8 else 1
+        inner_dim = 1 if q_int else 0
+        outer_dim = 0 if q_int else 1
         src_shape = src.shape
         dst_shape = dst.shape
         if (len(src_shape) == 2 and len(dst_shape) == 2):
@@ -581,7 +581,7 @@ def replace_transformer_layer(orig_layer_impl,
                         attn_block.attn_qkvw = mp_replace.copy(
                             attn_block.attn_qkvw,
                             quantizer.quantize(qkvw,
-                                               qkv=enable_qkv_quantization, force_int8=False))
+                                               qkv=enable_qkv_quantization, force_int8=False), q_int=quantizer.q_int)
                         attn_block.attn_qkvb = mp_replace.copy(
                             attn_block.attn_qkvb,
                             qkvb)
@@ -594,16 +594,17 @@ def replace_transformer_layer(orig_layer_impl,
                     attn_block.attn_qkvw = mp_replace.copy(attn_block.attn_qkvw, qkvw)
                     attn_block.attn_qkvb = mp_replace.copy(attn_block.attn_qkvb, qkvb)
                 else:
+                    print(f"attn_block.attn_qkvw.shape = {attn_block.attn_qkvw.shape}, qkvw.shape = {qkvw.shape}")
                     attn_block.attn_qkvw = mp_replace.qkv_copy(
                         attn_block.attn_qkvw,
                         quantizer.quantize(qkvw,
-                                           qkv=enable_qkv_quantization, force_int8=False))
+                                           qkv=enable_qkv_quantization, force_int8=False), q_int=quantizer.q_int)
                     attn_block.attn_qkvb = mp_replace.qkv_copy(
                         attn_block.attn_qkvb,
                         qkvb)
 
                 attn_block.attn_ow = mp_replace.copy(attn_block.attn_ow,
-                                                     quantizer.quantize(dense_w, force_int8=False))
+                                                     quantizer.quantize(dense_w, force_int8=False), q_int=quantizer.q_int)
                 attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
 
             if moe:
@@ -647,22 +648,22 @@ def replace_transformer_layer(orig_layer_impl,
                                                 modifier_rank=0):
                             mpl_block.inter_w = mp_replace.copy(
                                 mpl_block.inter_w,
-                                quantizer.quantize(_h4h_w, force_int8=False))
+                                quantizer.quantize(_h4h_w, force_int8=False), q_int=quantizer.q_int)
                             mpl_block.inter_b = mp_replace.copy(
                                 mpl_block.inter_b,
                                 _h4h_b)
                             mpl_block.output_w = mp_replace.copy(
                                 mpl_block.output_w,
-                                quantizer.quantize(_4hh_w, force_int8=False))
+                                quantizer.quantize(_4hh_w, force_int8=False), q_int=quantizer.q_int)
                             mpl_block.output_b = mp_replace.copy(
                                 mpl_block.output_b,
                                 _4hh_b)
                 else:
                     mpl_block.inter_w = mp_replace.copy(mpl_block.inter_w,
-                                                        quantizer.quantize(_h4h_w, force_int8=False))
+                                                        quantizer.quantize(_h4h_w, force_int8=False), q_int=quantizer.q_int)
                     mpl_block.inter_b = mp_replace.copy(mpl_block.inter_b, _h4h_b)
                     mpl_block.output_w = mp_replace.copy(mpl_block.output_w,
-                                                         quantizer.quantize(_4hh_w, force_int8=False))
+                                                         quantizer.quantize(_4hh_w, force_int8=False), q_int=quantizer.q_int)
                     mpl_block.output_b = mp_replace.copy(mpl_block.output_b, _4hh_b)
 
                 if attn_nw is None:
