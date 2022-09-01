@@ -136,7 +136,8 @@ class InferenceEngine(Module):
                     moe_type,
                     training_mp_size,
                     self.checkpoint if replace_with_kernel_inject else None,
-                    save_mp_checkpoint_path=save_mp_checkpoint_path)
+                    save_mp_checkpoint_path=save_mp_checkpoint_path,
+                    enable_qkv_quantization=enable_qkv_quantization)
         elif replace_method == 'auto':
             self._apply_injection_policy(
                 return_tuple=return_tuple,
@@ -342,7 +343,8 @@ class InferenceEngine(Module):
                                   ep_group=self.ep_group,
                                   expert_mp_group=self.expert_mp_group,
                                   config=self.config,
-                                  fp16=(self.dtype == torch.half),
+                                  fp16=(self.dtype == torch.half)
+                                  or (self.dtype == torch.int8),
                                   training=False,
                                   return_tuple=return_tuple,
                                   quantize=(self.dtype == torch.int8),

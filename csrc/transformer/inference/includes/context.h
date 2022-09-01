@@ -8,7 +8,7 @@
 #include "cublas_v2.h"
 #include "cuda.h"
 
-#define _100_MEGABYTE (100 * 1024 * 1024)
+#define MEGABYTE (1024 * 1024)
 
 #define WARP_SIZE 32
 
@@ -89,7 +89,7 @@ public:
         size_t activation_size = 16 * hidden_dim * batch_size;
         size_t cache_size = num_layers * batch_size * (hidden_dim / mp_size) * 2;
         _max_seq_len =
-            (((_free_memory_size - _100_MEGABYTE) / elem_size)) / (activation_size + cache_size);
+            (((_free_memory_size - 200 * MEGABYTE) / elem_size)) / (activation_size + cache_size);
 
         size_t workSpaceSize = (external_cache ? activation_size : (activation_size + cache_size)) *
                                _max_seq_len * elem_size;

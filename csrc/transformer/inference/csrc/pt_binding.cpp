@@ -925,7 +925,7 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
                                     bool q_int8)
 {
     int bsz = input.size(0) * input.size(1);
-    int out_size = weight.size(1);
+    int out_size = q_int8 ? weight.size(0) : weight.size(1);
     T* workspace = (T*)Context::Instance().GetWorkSpace();
     if (!workspace)
         cublasSetStream(Context::Instance().GetCublasHandle(),
@@ -1107,12 +1107,11 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
                        .requires_grad(false);
     T* workspace = (T*)Context::Instance().GetWorkSpace() +
                    (5 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2));
-    auto output =
-        torch::from_blob(workspace, {input.size(0), input.size(1), weight.size(1)}, options);
+
+    int out_size = q_int8 ? weight.size(0) : weight.size(1);
+    auto output = torch::from_blob(workspace, {input.size(0), input.size(1), out_size}, options);
     int bsz = input.size(0) * input.size(1);
     if (q_int8) {
-        int out_size = weight.size(0);
-
         int bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
                        : (bsz % 128 == 0)
@@ -1135,7 +1134,6 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
                   bsz,
                   Context::Instance().GetCurrentStream());
 
-        auto output = at::from_blob(workspace, input.sizes(), input.options());
         run_gemm(aux_buff,
                  weight.data_ptr(),
                  workspace,
@@ -1758,6 +1756,9 @@ void TransformerEncoder(at::Tensor& input,
     auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                     8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
+    auto aux_buff1 = (T*)Context::Instance().GetWorkSpace() +
+                     12 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
+
     T* input_ptr = (T*)input.data_ptr();
     float alpha = (T)1.0;
     float gemm_beta = (T)0.0;
@@ -1945,7 +1946,7 @@ void TransformerEncoder(at::Tensor& input,
 
         run_gemm(aux_buff,
                  mlp_weights[0].data_ptr(),
-                 buf_0,
+                 aux_buff1,
                  (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                  q_scale1.data_ptr(),
                  bsz1,
@@ -1956,7 +1957,7 @@ void TransformerEncoder(at::Tensor& input,
                  Context::Instance().GetCurrentStream());
         launch_bias_gelu_int8((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * out_size),
-                              (__half*)buf_0,
+                              (__half*)aux_buff1,
                               (__half*)mlp_biases[0].data_ptr(),
                               out_size,
                               bsz_seq,
