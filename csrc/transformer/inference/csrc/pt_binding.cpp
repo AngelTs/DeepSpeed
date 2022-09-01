@@ -837,7 +837,7 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
     if (q_int) {
         int out_size = weight.size(0);
         int bsz1 = bsz;
-        if(q_bits == 4) {
+        if(q_bits == 4 && 0) {
             // 128-aligned
             bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
         } else {
@@ -1056,7 +1056,7 @@ at::Tensor ds_linear_layer(at::Tensor& input,
     int bsz = input.size(0) * input.size(1);
     if (q_int) {
         int bsz1 = bsz;
-        if(q_bits == 4) {
+        if(q_bits == 4 && 0) {
             // 128-aligned
             bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
         } else {
@@ -1175,7 +1175,7 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
     if (q_int) {
         int out_size = weight.size(0);
         int bsz1 = bsz;
-        if(q_bits == 4) {
+        if(q_bits == 4 && 0) {
             // 128-aligned
             bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
         } else {
@@ -1312,7 +1312,7 @@ void mlp_unfused_cublas(T* output,
     if (q_int) {
         int out_size = weight.size(0);
         int bsz1 = bsz;
-        if(q_bits == 4) {
+        if(q_bits == 4 && 0) {
             // 128-aligned
             bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
         } else {
@@ -1594,7 +1594,7 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
     if (q_int) {
         int out_size = weight.size(0);
         int bsz1 = bsz;
-        if(q_bits == 4) {
+        if(q_bits == 4 && 0) {
             // 128-aligned
             bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
         } else {
@@ -1948,7 +1948,7 @@ void TransformerEncoder(at::Tensor& input,
 
     int bsz_seq = bsz * _seq_length;
     int bsz1 = bsz_seq;
-    if(q_bits == 4) {
+    if(q_bits == 4 && 0) {
         // 128-aligned
         bsz1 = bsz_seq % 128 == 0 ? bsz_seq : (bsz_seq / 128 + 1) * 128;
     } else {
