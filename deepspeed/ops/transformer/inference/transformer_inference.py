@@ -389,6 +389,7 @@ class DeepSpeedSelfAttention(nn.Module):
         DeepSpeedSelfAttention.num_layers = DeepSpeedSelfAttention.num_layers + 1
         device = torch.cuda.current_device() if config.bigscience_bloom else 'cpu'
         half_size = (config.q_int and config.q_bits == 4)
+        half_size = False
         self.attn_qkvw = nn.Parameter(
             torch.empty(self.config.hidden_size // 2 if half_size and config.enable_qkv_quantization else self.config.hidden_size,
                         (self.config.hidden_size // self.config.mp_size) * 3,
@@ -572,6 +573,7 @@ class DeepSpeedMLP(nn.Module):
         data_type = torch.half if config.fp16 else torch.float
         device = torch.cuda.current_device() if config.bigscience_bloom else 'cpu'
         half_size = (config.q_int and config.q_bits == 4)
+        half_size = False
         self.attn_nw = nn.Parameter(
             torch.empty(self.config.hidden_size,
                         dtype=data_type,

@@ -857,7 +857,7 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                     8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
-        if (q_bits == 8) {
+        if (q_bits == 8 or q_bits == 4) {
             launch_me((int8_t*)aux_buff,
                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                     (__half*)workspace,
@@ -1076,7 +1076,7 @@ at::Tensor ds_linear_layer(at::Tensor& input,
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
-        if(q_bits == 8) {
+        if(q_bits == 8 or q_bits == 4) {
             launch_me((int8_t*)aux_buff,
                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                     (__half*)input.data_ptr(),
@@ -1195,7 +1195,7 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
-        if(q_bits == 8) {
+        if(q_bits == 8 or q_bits == 4) {
             // don't know why I need to call this :-), but I have to !!!
             launch_me((int8_t*)aux_buff,
                     (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
@@ -1357,7 +1357,7 @@ void mlp_unfused_cublas(T* output,
         //         bsz1,
         //         q_scale1.size(0),
         //         Context::Instance().GetCurrentStream());
-        if(q_bits == 8) {
+        if(q_bits == 8 or q_bits == 4) {
             launch_me((int8_t*)auxilary_buf,
                     (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
                     (__half*)workspace,
@@ -1613,7 +1613,7 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
         }
         auto auxilary_buf =
             workspace + 8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
-        if(q_bits == 8) {
+        if(q_bits == 8 or q_bits == 4) {
             launch_me((int8_t*)auxilary_buf,
                     (float*)((int8_t*)auxilary_buf + bsz1 * input.size(2)),
                     (__half*)input.data_ptr(),
