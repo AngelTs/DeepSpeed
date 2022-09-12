@@ -685,7 +685,8 @@ class Init(InsertPostInitMethodToModuleSubClasses):
         self.num_ranks_in_param_group = self.world_size
         self.rank_in_group = self.rank
         self.num_param_groups = 1
-
+        
+        print_rank_0(f"SAGE zero param group? {self.zero_param_process_group}",force=True)
         if self.zero_param_process_group is not None: 
             self.num_ranks_in_param_group = groups._get_zero_param_intra_parallel_group_world_size() # of ranks within a parameter (intra) group
             self.num_param_groups =   int(self.world_size / self.num_ranks_in_param_group)
@@ -1104,7 +1105,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             #print_rank_0(f"Before Partitioning Param {param.ds_id} {param.ds_tensor} sec: {param.ds_secondary_tensor}",force=False)
             ###Do secondary partitioning for backward all gather
             if backward and self.zero_param_process_group is not None:
-                #print_rank_0(f"SAGE call SEC part: backward? {backward}",force=True)
+                print_rank_0(f"SAGE call SEC part: backward? {backward}",force=True)
                 self._partition_param_secondary(param, has_been_updated=has_been_updated)
             else:
                 #print_rank_0(f"SAGE call PRI part: backward? {backward}",force=True)

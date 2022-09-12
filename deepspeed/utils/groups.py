@@ -436,8 +436,9 @@ def _create_zero_param_parallel_group(group_size):
 
 def _get_zero_param_intra_parallel_group():
     """Get the ZeRO parameter partitioning intra parallel group the caller rank belongs to."""
-    assert _ZERO_PARAM_INTRA_PARALLEL_GROUP is not None, \
-        'ZeRO parameter partitioning group is not initialized'
+    #assert _ZERO_PARAM_INTRA_PARALLEL_GROUP is not None, \
+    #    'ZeRO parameter partitioning group is not initialized'
+    #TODO: Add warning
     return _ZERO_PARAM_INTRA_PARALLEL_GROUP
 
 def _zero_param_parallel_is_initialized():

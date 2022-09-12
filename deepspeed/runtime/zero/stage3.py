@@ -153,10 +153,10 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
 
         #num of ranks in a ZeRO param partitioning group
         self.zero_param_group_size = zero_param_group_size
-
-        zpg = None
-        print_rank_0(f"SAGE ZPG {self.zero_param_group_size} NOT SELF {zero_param_group_size}", force=True)
-        if self.zero_param_group_size > 1:
+        
+        zpg = groups._get_zero_param_intra_parallel_group()
+        print_rank_0(f"SAGE STAGE3 ZPG {self.zero_param_group_size} {zpg}", force=True)
+        if self.zero_param_group_size > 1 and zpg is None:
             self._set_zero_group_parallelism()
             zpg = groups._get_zero_param_intra_parallel_group()
 
