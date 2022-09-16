@@ -39,10 +39,11 @@ partitioned_param_data_shape = [0]
 zero_init_enabled = False
 
 
-def _dist_allgather_fn(input_tensor: Tensor, output_tensor: Tensor, group=None):
+def _dist_allgather_fn(input_tensor: Tensor, output_tensor: Tensor, group=None, forward=True):
     return instrument_w_nvtx(dist.allgather_fn)(output_tensor,
                                                 input_tensor,
                                                 group=group,
+                                                forward=forward,
                                                 async_op=True)
 
 
@@ -891,9 +892,12 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             if len(params) == 1:
                 # have an opportunity to avoid some intermediate memory allocations
                 param, = params
-
+                buffer_size = math.ceil(param.ds_numel/world_size)*world_size
+                if not forward and param.ds_secondary_tensor is not None:
+                    buffer_size = param.ds_secondary_tensor.shape[0]*world_size #make sure out is appropriately sized
                 param_buffer = torch.empty(
-                    math.ceil(param.ds_numel / world_size) * world_size,
+                    #math.ceil(param.ds_numel / world_size) * world_size,
+                    buffer_size,
                     dtype=param.dtype,
                     device=torch.cuda.current_device(),
                     requires_grad=False,
@@ -901,11 +905,15 @@ class Init(InsertPostInitMethodToModuleSubClasses):
 
                 #All gather on secondary tensor (with intragroup comm) if available
                 #param_ds_tensor = param.ds_secondary_tensor if self.use_secondary_tensor and not forward else param.ds_tensor
-                param_ds_tensor = param.ds_secondary_tensor if self.zero_param_process_group and not forward else param.ds_tensor
+                #param_ds_tensor = param.ds_secondary_tensor if self.zero_param_process_group and not forward else param.ds_tensor
+                param_ds_tensor = param.ds_secondary_tensor if not forward and param.ds_secondary_tensor is not None else param.ds_tensor
+                #if self.rank > 375:
+                #   print("hpZeRO ALLGP1 Rank [", self.rank," ", rank_in_group, "]", param_ds_tensor.size(), param_buffer.size(), len(dist.get_all_ranks_from_group(ds_process_group)), "Forward? ", forward)
                 handles = _dist_allgather_fn(
                     param_ds_tensor.to(torch.cuda.current_device()), 
                     param_buffer, 
                     ds_process_group,
+                    forward,
                 )
                
                 param.data = param_buffer.narrow(0,
@@ -931,7 +939,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                            partition_sz * i,
                                            partition_sz))
                  
-                
+                ''' 
                 if self.zero_param_process_group and not forward:
                         instrument_w_nvtx(torch.cat)(
                             [p.ds_secondary_tensor.to(torch.cuda.current_device()) for p in params],
@@ -940,10 +948,19 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     instrument_w_nvtx(torch.cat)(
                         [p.ds_tensor.to(torch.cuda.current_device()) for p in params],
                         out=partitions[rank_in_group])
-
+                '''
+                partition_list = []
+                for p in params:
+                    pds_tensor = p.ds_secondary_tensor if not forward and p.ds_secondary_tensor is not None  else p.ds_tensor
+                    partition_list.append(pds_tensor.to(torch.cuda.current_device()))
+                 
+                instrument_w_nvtx(torch.cat)(partition_list,out=partitions[rank_in_group])
+                #if self.rank > 375:
+                #   print("Rank [", self.rank," ", rank_in_group, "]", partitions[rank_in_group].size(), flat_tensor.size(), world_size, "Forward? ", forward)
+               
                 handle = _dist_allgather_fn(partitions[rank_in_group],  
                                                 flat_tensor,
-                                                ds_process_group)
+                                                ds_process_group,forward)
 
                  
                 return AllGatherCoalescedHandle(
@@ -1171,7 +1188,9 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             tensor_size = self._aligned_size(param)
             partition_size = tensor_size // self.world_size
 
-            secondary_partition_size = tensor_size // self.num_ranks_in_param_group ##SAGE group size
+            secondary_partition_size = int(tensor_size // self.num_ranks_in_param_group) ##SAGE group size
+            #secondary_partition_size = math.floor(tensor_size // self.num_ranks_in_param_group) ##SAGE group size
+            #secondary_partition_size = partition_size*(self.world_size // self.num_ranks_in_param_group)
 
             if param.ds_tensor is None: ##assumption, invalid primary assumes invalid secondary, here create both!!!
                 final_location = None
@@ -1211,7 +1230,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     if self.pin_memory:
                         partitioned_tensor = partitioned_tensor.pin_memory()
                         if self.zero_param_process_group is not None:
-                            secondary_partitioned_tensor = partitioned_tensor.pin_memory()
+                            secondary_partitioned_tensor = secondary_partitioned_tensor.pin_memory()
 
                 partitioned_tensor.requires_grad = False
                 param.ds_tensor = partitioned_tensor
@@ -1258,8 +1277,12 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 #                                  dtype=param.dtype,
                 #                                  device=self.remote_device )
 
+                #elements_to_copy = param.ds_numel - start ##for debugging. remove
                 if start < param.ds_numel:
                     elements_to_copy = param.ds_numel - start
+                    #elements_to_copy_sec = param.ds_numel - secondary_start
+                    elements_to_copy_sec = elements_to_copy*param.ds_secondary_tensor_num_of_groups
+                    #print("hpZERO rank [", dist.get_rank(),", ", self.rank_in_group, "] secondary start ", secondary_start, "numel ", param.ds_numel, "elt copy pri", elements_to_copy," elt copy sec ", elements_to_copy_sec, "1d param ", one_dim_param.size(), " pri tensor", param.ds_tensor.size(), " second tensor", param.ds_secondary_tensor.size(), "pri start ", start, "pri end", end, "second end ", secondary_end, "sec part size", secondary_partition_size, "pri part size", partition_size, "tensor size", tensor_size, "num ranks in group", self.num_ranks_in_param_group) 
                     param.ds_tensor.narrow(0,
                                            0,
                                            elements_to_copy).copy_(
@@ -1267,20 +1290,31 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                                    0,
                                                    start,
                                                    elements_to_copy))
+                    if self.zero_param_process_group is not None:
+                        param.ds_secondary_tensor.narrow(0,
+                                               0,
+                                               elements_to_copy_sec).copy_(
+                                                    one_dim_param.narrow(
+                                                       0,
+                                                       secondary_start,
+                                                       elements_to_copy_sec))
+                        self.use_secondary_tensor=True
+                '''
                 ##Fix
                 if self.zero_param_process_group is not None and secondary_start < param.ds_numel:
                 #if self.zero_param_process_group is not None and secondary_start < param.ds_numel and secondary_end <= param.ds_numel:
-                    elements_to_copy_sec = param.ds_numel - start
+                    elements_to_copy_sec = param.ds_numel - secondary_start
+                    print("hpZERO rank [", dist.get_rank(),", ", self.rank_in_group, "] secondary start ", secondary_start, "numel ", param.ds_numel, "elt copy pri", elements_to_copy," elt copy sec ", elements_to_copy_sec, "1d param ", one_dim_param.size(), " pri tensor", param.ds_tensor.size(), " second tensor", param.ds_secondary_tensor.size(), "pri start ", start, "pri end", end, "second end ", secondary_end, "sec part size", secondary_partition_size, "pri part size", partition_size, "tensor size", tensor_size, "num ranks in group", self.num_ranks_in_param_group) 
                     param.ds_secondary_tensor.narrow(0,
-                                           0,
+                                           secondary_start,
                                            elements_to_copy_sec).copy_(
                                                one_dim_param.narrow(
                                                    0,
-                                                   start,
+                                                   secondary_start,
                                                    elements_to_copy_sec))
                     self.use_secondary_tensor=True
 
-
+                '''
             #print(f"Remote device {self.remote_device}")
 
             #param.ds_tensor = partitioned_tensor
