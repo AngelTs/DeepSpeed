@@ -9,6 +9,7 @@
 #include "cuda.h"
 
 #define MEGABYTE (1024 * 1024)
+#define GIGABYTE (1024 * 1024 * 1024)
 
 #define WARP_SIZE 32
 
@@ -81,24 +82,30 @@ public:
                              const bool& external_cache,
                              const size_t& elem_size)
     {
-        if (!_free_memory_size) {
-            size_t total_size;
-            cudaMemGetInfo(&_free_memory_size, &total_size);
-        }
-
+        size_t total_size = 0;
+        if (!_free_memory_size) { cudaMemGetInfo(&_free_memory_size, &total_size); }
         size_t activation_size = 16 * hidden_dim * batch_size;
         size_t cache_size = num_layers * batch_size * (hidden_dim / mp_size) * 2;
+        assert(_free_memory_size > 100 * MEGABYTE);
         _max_seq_len =
-            (((_free_memory_size - 200 * MEGABYTE) / elem_size)) / (activation_size + cache_size);
-
+            (((_free_memory_size - (_free_memory_size > GIGABYTE ? 500 : 100) * MEGABYTE) /
+              elem_size)) /
+            (activation_size + cache_size);
+        if (total_size)
+            printf(
+                "Free memory : %lu (Bytes)  Total memory: %lu (Bytes)  Setting maximum total "
+                "tokens (input + output) to %lu \n",
+                _free_memory_size,
+                total_size,
+                _max_seq_len);
         size_t workSpaceSize = (external_cache ? activation_size : (activation_size + cache_size)) *
                                _max_seq_len * elem_size;
         if (!_workspace) {
             assert(_workspace == nullptr);
-            cudaMalloc(&_workspace, workSpaceSize);
+            CUDA_CHECK(cudaMalloc(&_workspace, workSpaceSize));
         } else if (_workSpaceSize < workSpaceSize) {
             cudaFree(_workspace);
-            cudaMalloc(&_workspace, workSpaceSize);
+            CUDA_CHECK(cudaMalloc(&_workspace, workSpaceSize));
         }
 
         if (!_workspace) { throw std::runtime_error("Workspace is null."); }
