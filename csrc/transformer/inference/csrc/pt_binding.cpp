@@ -1966,7 +1966,6 @@ void TransformerEncoder(at::Tensor& input,
                                                                 : bsz_seq + (32 - (bsz_seq % 32)))
                                         : bsz_seq + (64 - (bsz_seq % 64)))
                             : bsz_seq + (128 - (bsz_seq % 128));
-        bsz1 = bsz_seq % 128 == 0 ? bsz_seq : (bsz_seq / 128 + 1) * 128;
     }
     auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                     8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
