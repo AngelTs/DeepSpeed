@@ -44,7 +44,7 @@ class GroupQuantizer:
         self.num_bits = num_bits
         self.q_int = q_int
 
-    def quantize(self, inputs, qkv=True, force_int8=True):
+    def quantize(self, inputs, qkv=True, force_int8=False):
         if not self.q_int or not qkv:
             inputs = torch.nn.Parameter(inputs, requires_grad=False)
             inputs.scale = torch.empty(1)
@@ -54,10 +54,12 @@ class GroupQuantizer:
         if force_int8:
             num_bits = 8
 
-        q_range = 2**self.num_bits
+        q_range = 2**num_bits
 
         # inputs_test = 0.5* torch.ones(inputs.shape, device=inputs.device, dtype=inputs.dtype)
         # inputs = inputs_test.to(torch.cuda.current_device())
+
+        # inputs = 0.1 * torch.ones(inputs.shape)
 
         inputs = inputs.to(torch.cuda.current_device())
         input_flat = inputs.reshape(self.num_groups, -1).contiguous()
@@ -602,7 +604,7 @@ def replace_transformer_layer(orig_layer_impl,
                         qkvb)
 
                 attn_block.attn_ow = mp_replace.copy(attn_block.attn_ow,
-                                                     quantizer.quantize(dense_w))
+                                                     quantizer.quantize(dense_w, force_int8=False))
                 attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
 
             if moe:
@@ -658,10 +660,10 @@ def replace_transformer_layer(orig_layer_impl,
                                 _4hh_b)
                 else:
                     mpl_block.inter_w = mp_replace.copy(mpl_block.inter_w,
-                                                        quantizer.quantize(_h4h_w))
+                                                        quantizer.quantize(_h4h_w, force_int8=True))
                     mpl_block.inter_b = mp_replace.copy(mpl_block.inter_b, _h4h_b)
                     mpl_block.output_w = mp_replace.copy(mpl_block.output_w,
-                                                         quantizer.quantize(_4hh_w))
+                                                         quantizer.quantize(_4hh_w, force_int8=True))
                     mpl_block.output_b = mp_replace.copy(mpl_block.output_b, _4hh_b)
 
                 if attn_nw is None:

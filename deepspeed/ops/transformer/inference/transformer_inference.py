@@ -401,7 +401,7 @@ class DeepSpeedSelfAttention(nn.Module):
                         device=device))
 
         self.attn_ow = nn.Parameter(
-            torch.empty((self.config.hidden_size // self.config.mp_size // 2) if half_size else (self.config.hidden_size // self.config.mp_size),
+            torch.empty((self.config.hidden_size // self.config.mp_size // 2) if config.q_bits == 4 else (self.config.hidden_size // self.config.mp_size),
                         self.config.hidden_size,
                         dtype=data_type,
                         device=device))
