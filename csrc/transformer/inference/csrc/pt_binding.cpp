@@ -2005,9 +2005,9 @@ void TransformerEncoder(at::Tensor& input,
 
         // std::cout << "attn_weights[0][0] = " << attn_weights[0][0] << ", q_scale[0] = " <<
         // q_scale3[0] << std::endl;
-        c10::Half temp[10];
-        cudaMemcpy(temp, (c10::Half*)(input_ptr), sizeof(c10::Half) * 10, cudaMemcpyDeviceToHost);
-        std::cout << "input[0] = " << ((c10::Half*)(temp))[0] << std::endl;
+        // c10::Half temp[10];
+        // cudaMemcpy(temp, (c10::Half*)(input_ptr), sizeof(c10::Half) * 10, cudaMemcpyDeviceToHost);
+        // std::cout << "input[0] = " << ((c10::Half*)(temp))[0] << std::endl;
 
         int out_size = attn_weights[0].size(0);
         if (q_bits == 8) {
@@ -2034,7 +2034,7 @@ void TransformerEncoder(at::Tensor& input,
             // std::cout << "after int4, buf_1 = " << ((c10::Half*)(buf_11))[0] << std::endl;
         } else {
             assert(q_bits == 4);
-            std::cout << "attn_qkv q_bits == 4" << std::endl;
+            // std::cout << "attn_qkv q_bits == 4" << std::endl;
 
             run_quantize_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
@@ -2043,13 +2043,13 @@ void TransformerEncoder(at::Tensor& input,
                               bsz_seq,
                               Context::Instance().GetCurrentStream());
 
-            int8_t aux_bufff[10];
-            float scale[1];
-            cudaMemcpy(aux_bufff, aux_buff, sizeof(int8_t) * 10, cudaMemcpyDeviceToHost);
-            cudaMemcpy(scale,
-                       (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                       sizeof(float),
-                       cudaMemcpyDeviceToHost);
+            // int8_t aux_bufff[10];
+            // float scale[1];
+            // cudaMemcpy(aux_bufff, aux_buff, sizeof(int8_t) * 10, cudaMemcpyDeviceToHost);
+            // cudaMemcpy(scale,
+            //            (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+            //            sizeof(float),
+            //            cudaMemcpyDeviceToHost);
 
             run_gemm_int4(aux_buff,
                           attn_weights[0].data_ptr(),

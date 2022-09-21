@@ -56,22 +56,21 @@ class GroupQuantizer:
 
         q_range = 2**num_bits
 
-        # inputs_test = 0.5* torch.ones(inputs.shape, device=inputs.device, dtype=inputs.dtype)
-        # inputs = inputs_test.to(torch.cuda.current_device())
-
-        # inputs = 0.1 * torch.ones(inputs.shape)
-
         inputs = inputs.to(torch.cuda.current_device())
         input_flat = inputs.reshape(self.num_groups, -1).contiguous()
         input_min = torch.min(input_flat, dim=1, keepdim=True)[0].float()
         input_max = torch.max(input_flat, dim=1, keepdim=True)[0].float()
         scale = torch.max(input_min.abs(), input_max.abs()) * 2.0 / (q_range)
+        # print(f"{input_flat.shape},  {input_min.shape}, {input_max}, {scale.shape}")
+
         input_flat = (input_flat / scale).round().clamp(-q_range // 2, q_range // 2 - 1)
         inputs_q = input_flat.reshape(inputs.shape).to(torch.int8).contiguous()
         if num_bits==4:
             inputs_q = packInt4(inputs_q)
         out = torch.nn.Parameter(inputs_q, requires_grad=False)
         out.scale = scale
+        # print(f"weight kernel after quant = {inputs_q.data}, , scale = {scale}")
+
         return out
 
 
@@ -326,16 +325,11 @@ def replace_transformer_layer(orig_layer_impl,
             _res_coef = _res_coef.half()
 
         mp_replace = ReplaceWithTensorSlicing(mp_group=mp_group)
-        if quantize_settings is not None:
-            (quantization_scales,
-                merge_count,
-                mlp_extra_grouping,
-                quantize_groups) = quantize_settings
-        else:
-            quantization_scales = None
-            merge_count = 1
-            mlp_extra_grouping = 1
-            quantize_groups = 1
+        assert quantize_settings, "quantize_settings is None"
+        (quantization_scales,
+            merge_count,
+            mlp_extra_grouping,
+            quantize_groups) = quantize_settings
         quantizer = GroupQuantizer(q_int=quantize, num_bits=quantize_bits, num_groups=quantize_groups)
 
         #expert_mp_replace = ReplaceWithTensorSlicing(mp_group=expert_mp_group)
@@ -582,7 +576,7 @@ def replace_transformer_layer(orig_layer_impl,
                         attn_block.attn_qkvw = mp_replace.copy(
                             attn_block.attn_qkvw,
                             quantizer.quantize(qkvw,
-                                               qkv=enable_qkv_quantization))
+                                               qkv=enable_qkv_quantization, force_int8=False))
                         attn_block.attn_qkvb = mp_replace.copy(
                             attn_block.attn_qkvb,
                             qkvb)
