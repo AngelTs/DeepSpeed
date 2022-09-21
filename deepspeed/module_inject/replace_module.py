@@ -660,10 +660,10 @@ def replace_transformer_layer(orig_layer_impl,
                                 _4hh_b)
                 else:
                     mpl_block.inter_w = mp_replace.copy(mpl_block.inter_w,
-                                                        quantizer.quantize(_h4h_w, force_int8=True))
+                                                        quantizer.quantize(_h4h_w, force_int8=False))
                     mpl_block.inter_b = mp_replace.copy(mpl_block.inter_b, _h4h_b)
                     mpl_block.output_w = mp_replace.copy(mpl_block.output_w,
-                                                         quantizer.quantize(_4hh_w, force_int8=True))
+                                                         quantizer.quantize(_4hh_w, force_int8=False))
                     mpl_block.output_b = mp_replace.copy(mpl_block.output_b, _4hh_b)
 
                 if attn_nw is None:
