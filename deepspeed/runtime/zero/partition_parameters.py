@@ -945,11 +945,13 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                         flat_tensor.narrow(0,
                                            partition_sz * i,
                                            partition_sz))
-                '''
+
                 if self.zero_param_process_group and not forward:
-                        instrument_w_nvtx(torch.cat)(
-                            [p.ds_secondary_tensor.to(torch.cuda.current_device()) for p in params],
-                            out=partitions[rank_in_group])
+                    instrument_w_nvtx(torch.cat)([
+                        p.ds_secondary_tensor.to(torch.cuda.current_device())
+                        for p in params
+                    ],
+                                                 out=partitions[rank_in_group])
                 else:
                     instrument_w_nvtx(torch.cat)(
                         [p.ds_tensor.to(torch.cuda.current_device()) for p in params],
@@ -962,6 +964,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
 
                 instrument_w_nvtx(torch.cat)(partition_list,
                                              out=partitions[rank_in_group])
+                '''
                 #if self.rank > 375:
                 #   print("Rank [", self.rank," ", rank_in_group, "]", partitions[rank_in_group].size(), flat_tensor.size(), world_size, "Forward? ", forward)
 
@@ -1135,17 +1138,9 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                    has_been_updated=False):
         for param in param_list:
             #print_rank_0(f"Before Partitioning Param {param.ds_id} {param.ds_tensor} sec: {param.ds_secondary_tensor}",force=False)
-            ###Do secondary partitioning for in forward pass for backward all gather
-            self._partition_param(param, has_been_updated=has_been_updated)
-            #self._partition_param_secondary(param, has_been_updated=has_been_updated)
-            '''
-            if not backward and self.zero_param_process_group is not None:
-                print_rank_0(f"SAGE call SEC part: backward? {backward}",force=True)
-                self._partition_param_secondary(param, has_been_updated=has_been_updated)
-            else:
-                #print_rank_0(f"SAGE call PRI part: backward? {backward}",force=True)
-                self._partition_param(param, has_been_updated=has_been_updated)
-            '''
+            self._partition_param(param,
+                                  has_been_updated=has_been_updated,
+                                  backward=backward)
             param.ds_status = ZeroParamStatus.NOT_AVAILABLE
             # if param.ds_tensor is not None:
             #    assert id(param.data) == id(param.ds_tensor.data), \
@@ -1156,10 +1151,12 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             #self._param_status(param)
 
     @instrument_w_nvtx
-    def _partition_param(self, param, buffer=None, has_been_updated=False):
+    def _partition_param(self,
+                         param,
+                         buffer=None,
+                         has_been_updated=False,
+                         backward=False):
         assert param.ds_status is not ZeroParamStatus.INFLIGHT, f" {param} Cannot partition a param in flight"
-        #assert/make sure secondary partition to None
-        #param.ds_seondary_tensor = None
         global reuse_buffers
         print_rank_0(f"Param id {param.ds_id} status is {param.ds_status}")
         if param.ds_status is ZeroParamStatus.AVAILABLE:
@@ -1215,15 +1212,15 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                                      dtype=param.dtype,
                                                      device=buffer.device)
                     partitioned_tensor.data = buffer.data
-
-                    secondary_buffer = self.param_swapper.get_buffer(
-                        param,
-                        secondary_partition_size)
-                    secondary_partitioned_tensor = torch.empty(
-                        0,
-                        dtype=param.dtype,
-                        device=secondary_buffer.device)
-                    secondary_partitioned_tensor.data = secondary_buffer.data
+                    if self.zero_param_process_group is not None and not backward:
+                        secondary_buffer = self.param_swapper.get_buffer(
+                            param,
+                            secondary_partition_size)
+                        secondary_partitioned_tensor = torch.empty(
+                            0,
+                            dtype=param.dtype,
+                            device=secondary_buffer.device)
+                        secondary_partitioned_tensor.data = secondary_buffer.data
                     ##SAGE end sec part
                     print_rank_0(
                         f"ID {param.ds_id} Initializing partition for the first time for nvme offload."
@@ -1236,7 +1233,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                         device=OffloadDeviceEnum.cpu if self.remote_device
                         == OffloadDeviceEnum.nvme else self.remote_device)
                     ##TODO: add option flag
-                    if self.zero_param_process_group is not None:
+                    if self.zero_param_process_group is not None and not backward:
                         secondary_partitioned_tensor = torch.empty(
                             secondary_partition_size,
                             dtype=param.dtype,
@@ -1245,7 +1242,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
 
                     if self.pin_memory:
                         partitioned_tensor = partitioned_tensor.pin_memory()
-                        if self.zero_param_process_group is not None:
+                        if self.zero_param_process_group is not None and not backward:
                             secondary_partitioned_tensor = secondary_partitioned_tensor.pin_memory(
                             )
 
@@ -1255,7 +1252,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 param.ds_tensor.status = PartitionedParamStatus.AVAILABLE
                 param.ds_tensor.final_location = final_location
 
-                if self.zero_param_process_group is not None:
+                if self.zero_param_process_group is not None and not backward:
                     secondary_partitioned_tensor.requires_grad = False
                     param.ds_secondary_tensor = secondary_partitioned_tensor
                     param.ds_secondary_tensor.ds_numel = secondary_partition_size
@@ -1277,12 +1274,13 @@ class Init(InsertPostInitMethodToModuleSubClasses):
 
                 param.ds_tensor.copy_(src_tensor)
 
-                if self.zero_param_process_group is not None and secondary_start < param.ds_numel and secondary_end <= param.ds_numel:
-                    sec_src_tensor = one_dim_param.narrow(0,
-                                                          secondary_start,
-                                                          secondary_partition_size)
-                    param.ds_secondary_tensor.copy_(sec_src_tensor)
-                    self.use_secondary_tensor = True
+                if self.zero_param_process_group is not None and not backward:
+                    if secondary_start < param.ds_numel and secondary_end <= param.ds_numel:
+                        sec_src_tensor = one_dim_param.narrow(0,
+                                                              secondary_start,
+                                                              secondary_partition_size)
+                        param.ds_secondary_tensor.copy_(sec_src_tensor)
+                        self.use_secondary_tensor = True
                     ##TODO:SAGE  assert that secondary tensor is of right size
                     #assert(param.ds_secondary_tensor_size == param.ds_numel/group size)
                     #assert(param.ds_secondary_tensor_size == ds_tensor*num_param_groups)
@@ -1293,12 +1291,9 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 #                                  dtype=param.dtype,
                 #                                  device=self.remote_device )
 
-                #elements_to_copy = param.ds_numel - start ##for debugging. remove
                 if start < param.ds_numel:
                     elements_to_copy = param.ds_numel - start
-                    #elements_to_copy_sec = param.ds_numel - secondary_start
                     elements_to_copy_sec = elements_to_copy * param.ds_secondary_tensor_num_of_groups
-                    #print("hpZERO rank [", dist.get_rank(),", ", self.rank_in_group, "] secondary start ", secondary_start, "numel ", param.ds_numel, "elt copy pri", elements_to_copy," elt copy sec ", elements_to_copy_sec, "1d param ", one_dim_param.size(), " pri tensor", param.ds_tensor.size(), " second tensor", param.ds_secondary_tensor.size(), "pri start ", start, "pri end", end, "second end ", secondary_end, "sec part size", secondary_partition_size, "pri part size", partition_size, "tensor size", tensor_size, "num ranks in group", self.num_ranks_in_param_group)
                     param.ds_tensor.narrow(0,
                                            0,
                                            elements_to_copy).copy_(
@@ -1306,7 +1301,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                                    0,
                                                    start,
                                                    elements_to_copy))
-                    if self.zero_param_process_group is not None:
+                    if self.zero_param_process_group is not None and not backward:
                         param.ds_secondary_tensor.narrow(0,
                                                          0,
                                                          elements_to_copy_sec).copy_(
@@ -1315,22 +1310,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                                                  secondary_start,
                                                                  elements_to_copy_sec))
                         self.use_secondary_tensor = True
-                '''
-                ##Fix
-                if self.zero_param_process_group is not None and secondary_start < param.ds_numel:
-                #if self.zero_param_process_group is not None and secondary_start < param.ds_numel and secondary_end <= param.ds_numel:
-                    elements_to_copy_sec = param.ds_numel - secondary_start
-                    print("hpZERO rank [", dist.get_rank(),", ", self.rank_in_group, "] secondary start ", secondary_start, "numel ", param.ds_numel, "elt copy pri", elements_to_copy," elt copy sec ", elements_to_copy_sec, "1d param ", one_dim_param.size(), " pri tensor", param.ds_tensor.size(), " second tensor", param.ds_secondary_tensor.size(), "pri start ", start, "pri end", end, "second end ", secondary_end, "sec part size", secondary_partition_size, "pri part size", partition_size, "tensor size", tensor_size, "num ranks in group", self.num_ranks_in_param_group)
-                    param.ds_secondary_tensor.narrow(0,
-                                           secondary_start,
-                                           elements_to_copy_sec).copy_(
-                                               one_dim_param.narrow(
-                                                   0,
-                                                   secondary_start,
-                                                   elements_to_copy_sec))
-                    self.use_secondary_tensor=True
 
-                '''
             #print(f"Remote device {self.remote_device}")
 
             #param.ds_tensor = partitioned_tensor
@@ -1346,126 +1326,6 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                              force=False)
 
             if param.ds_tensor.final_location == OffloadDeviceEnum.nvme:
-                self.param_swapper.swap_out_and_release([param])
-                print_rank_0(
-                    f"ID {param.ds_id} Offloaded to nvme offload and buffers released.")
-                see_memory_usage(
-                    f"ID {param.ds_id} Offloaded to nvme offload and buffers released.",
-                    force=True)
-
-            print_rank_0(
-                f"ID {param.ds_id} partitioned type {param.dtype} dev {param.device} shape {param.shape}",
-                force=True)
-
-    @instrument_w_nvtx
-    def _partition_param_secondary(self, param, buffer=None, has_been_updated=False):
-        assert param.ds_status is not ZeroParamStatus.INFLIGHT, f" {param} Cannot partition a param in flight"
-
-        #print_rank_0(f"Param id {param.ds_id} status is {param.ds_status}")
-        if param.ds_status is ZeroParamStatus.AVAILABLE:
-            #print_rank_0(
-            #    f"Partitioning param id {param.ds_id} reuse buffers {reuse_buffers}",
-            #    force=False)
-            # if deepspeed.comm.get_rank():
-            #    print(f"Releasing {param.data.numel()}")
-            if param.ds_secondary_tensor is not None and not has_been_updated:  ##param already partitioned
-
-                see_memory_usage(
-                    f'Before secondary partitioning param {param.ds_id} {param.shape}',
-                    force=False)
-                # param.data does not store anything meaningful in partitioned state
-                free_param(param)
-                see_memory_usage(
-                    f'After secondary partitioning param {param.ds_id} {param.shape}',
-                    force=False)
-
-                if param.ds_secondary_tensor.final_location == OffloadDeviceEnum.nvme:
-                    print_rank_0(
-                        f"Param {param.ds_id} partition released since it exists in nvme",
-                        force=False)
-                    param.nvme_swapper.remove_partition_and_release_buffers([param])
-
-                return
-
-            tensor_size = self._aligned_size(param)
-            partition_size = tensor_size // self.world_size
-
-            start = partition_size * self.rank
-            end = start + partition_size
-
-            secondary_partition_size = tensor_size // self.num_ranks_in_param_group  ##group size
-
-            if param.ds_secondary_tensor is None:  ##assumption, invalid primary assumes invalid secondary, here create both!!!
-                final_location = None
-                if self.remote_device == OffloadDeviceEnum.nvme and self.param_swapper.swappable_tensor(
-                        numel=secondary_partition_size):
-                    final_location = OffloadDeviceEnum.nvme
-
-                    secondary_buffer = self.param_swapper.get_buffer(
-                        param,
-                        secondary_partition_size)
-                    secondary_partitioned_tensor = torch.empty(
-                        0,
-                        dtype=param.dtype,
-                        device=secondary_buffer.device)
-                    secondary_partitioned_tensor.data = secondary_buffer.data
-                    print_rank_0(
-                        f"ID {param.ds_id} Initializing partition for the first time for nvme offload."
-                    )
-
-                else:
-                    secondary_partitioned_tensor = torch.empty(
-                        secondary_partition_size,
-                        dtype=param.dtype,
-                        device=OffloadDeviceEnum.cpu if self.remote_device
-                        == OffloadDeviceEnum.nvme else self.remote_device)
-
-                    if self.pin_memory:
-                        secondary_partitioned_tensor = secondary_partitioned_tensor.pin_memory(
-                        )
-
-                secondary_partitioned_tensor.requires_grad = False
-                param.ds_secondary_tensor = secondary_partitioned_tensor
-                param.ds_secondary_tensor.ds_numel = secondary_partition_size
-                param.ds_secondary_tensor.status = PartitionedParamStatus.AVAILABLE
-                param.ds_secondary_tensor.final_location = final_location
-
-            #use rank in group for secondary tensor
-            secondary_start = secondary_partition_size * self.rank_in_group
-
-            secondary_end = secondary_start + secondary_partition_size
-
-            one_dim_param = param.contiguous().view(-1)
-
-            if start < param.ds_numel and end <= param.ds_numel:
-                sec_src_tensor = one_dim_param.narrow(0,
-                                                      secondary_start,
-                                                      secondary_partition_size)
-                param.ds_secondary_tensor.copy_(sec_src_tensor)
-                self.use_secondary_tensor = True
-
-            else:
-
-                if secondary_start < param.ds_numel:
-                    elements_to_copy_sec = param.ds_numel - secondary_start
-                    param.ds_secondary_tensor.narrow(0,
-                                                     0,
-                                                     elements_to_copy_sec).copy_(
-                                                         one_dim_param.narrow(
-                                                             0,
-                                                             secondary_start,
-                                                             elements_to_copy_sec))
-                    self.use_secondary_tensor = True  #TODO
-
-            see_memory_usage(
-                f'Before secondary partitioning param {param.ds_id} {param.shape}',
-                force=False)
-            free_param(param)
-            see_memory_usage(
-                f'After secondary partitioning param {param.ds_id} {param.shape}',
-                force=False)
-
-            if param.ds_secondary_tensor.final_location == OffloadDeviceEnum.nvme:
                 self.param_swapper.swap_out_and_release([param])
                 print_rank_0(
                     f"ID {param.ds_id} Offloaded to nvme offload and buffers released.")
