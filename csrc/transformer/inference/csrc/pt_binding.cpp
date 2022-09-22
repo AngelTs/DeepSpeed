@@ -1973,8 +1973,8 @@ void TransformerEncoder(at::Tensor& input,
     auto aux_buff1 = (T*)Context::Instance().GetWorkSpace() +
                     12 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
-    auto aux_bufff = (T*)Context::Instance().GetWorkSpace() +
-                    16 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
+    // auto aux_bufff = (T*)Context::Instance().GetWorkSpace() +
+    //                 16 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
     T* input_ptr = (T*)input.data_ptr();
     float alpha = (T)1.0;
@@ -2181,21 +2181,21 @@ void TransformerEncoder(at::Tensor& input,
     if (q_int) {
         int out_size = attn_weights[1].size(0);
 
-        torch::Tensor a = 1 * torch::ones({1, 11, 1024}, input.options());
+        // torch::Tensor a = 1 * torch::ones({1, 11, 1024}, input.options());
         // buf_2 = (T*)a.data_ptr();
 
-        torch::Tensor b = 119 * torch::ones({attn_weights[1].size(0), attn_weights[1].size(1)/2}, attn_weights[0].options());
-        T *b_ptr = (T*)b.data_ptr();
-        torch::Tensor b_scale = 0.125 * torch::ones({q_scale2.size(0)}, attn_weights[1].options());
-        T *b_scale_ptr = (T*)b_scale.data_ptr();
+        // torch::Tensor b = 119 * torch::ones({attn_weights[1].size(0), attn_weights[1].size(1)/2}, attn_weights[0].options());
+        // T *b_ptr = (T*)b.data_ptr();
+        // torch::Tensor b_scale = 0.125 * torch::ones({q_scale2.size(0)}, attn_weights[1].options());
+        // T *b_scale_ptr = (T*)b_scale.data_ptr();
 
         // std::cout << "attn_weights.size = " << attn_weights[1].size(0) << "," << attn_weights[1].size(1) << std::endl;
 
-        torch::Tensor w = 1 * torch::ones({1024, 1024}, input.options());
-        T *w_ptr = (T*)w.data_ptr();
+        // torch::Tensor w = 1 * torch::ones({1024, 1024}, input.options());
+        // T *w_ptr = (T*)w.data_ptr();
 
-        c10::Half temp[10];
-        cudaMemcpy(temp, (c10::Half*)(buf_2), sizeof(c10::Half) * 10, cudaMemcpyDeviceToHost);
+        // c10::Half temp[10];
+        // cudaMemcpy(temp, (c10::Half*)(buf_2), sizeof(c10::Half) * 10, cudaMemcpyDeviceToHost);
         // std::cout << "buf_2[0] = " << ((c10::Half*)(temp))[0] << std::endl;
 
         if (q_bits == 8) {
@@ -2205,13 +2205,12 @@ void TransformerEncoder(at::Tensor& input,
                     input.size(2),
                     bsz_seq,
                     Context::Instance().GetCurrentStream());
-            c10::Half aux_bufff[10];
-            cudaMemcpy(aux_bufff, aux_buff, sizeof(int8_t) * 10, cudaMemcpyDeviceToHost);
+            // c10::Half aux_bufff[10];
+            // cudaMemcpy(aux_bufff, aux_buff, sizeof(int8_t) * 10, cudaMemcpyDeviceToHost);
             // std::cout << "after launch_me, aux_bufff[0] = " << int(((int8_t*)(aux_bufff))[0]) << std::endl;
-            float a_scale[10];
-            cudaMemcpy(a_scale, (float*)((int8_t*)aux_buff + bsz1 * input.size(2)), sizeof(float) * 10, cudaMemcpyDeviceToHost);
+            // float a_scale[10];
+            // cudaMemcpy(a_scale, (float*)((int8_t*)aux_buff + bsz1 * input.size(2)), sizeof(float) * 10, cudaMemcpyDeviceToHost);
             // std::cout << "after launch_me, a_scale[0] = " << (((a_scale))[0]) << std::endl;
-
 
             run_gemm(aux_buff,
                     attn_weights[1].data_ptr(),
@@ -2224,8 +2223,8 @@ void TransformerEncoder(at::Tensor& input,
                     bsz1,
                     q_scale2.size(0),
                     Context::Instance().GetCurrentStream());
-            c10::Half buf_11[1024*1024];
-            cudaMemcpy(buf_11, buf_1, sizeof(c10::Half) * 1024*1024, cudaMemcpyDeviceToHost);
+            // c10::Half buf_11[1024*1024];
+            // cudaMemcpy(buf_11, buf_1, sizeof(c10::Half) * 1024*1024, cudaMemcpyDeviceToHost);
             // std::cout << "after int8 gemm, buf_1 = " << ((c10::Half*)(buf_11))[0] << std::endl;
             // for(int i = 0; i < 1024*1024; i++) {
             //     if (((c10::Half*)(buf_11))[i] != 1008) {
@@ -2243,8 +2242,8 @@ void TransformerEncoder(at::Tensor& input,
                               bsz_seq,
                               new_stream);
 
-            c10::Half aux_bufff[512];
-            cudaMemcpy(aux_bufff, aux_buff, sizeof(int8_t) * 512, cudaMemcpyDeviceToHost);
+            // c10::Half aux_bufff[512];
+            // cudaMemcpy(aux_bufff, aux_buff, sizeof(int8_t) * 512, cudaMemcpyDeviceToHost);
             // std::cout << "after launch_me, aux_bufff[0] = " << int(((int8_t*)(aux_bufff))[0]) << std::endl;
             // for(int i = 0; i < 512; i++) {
             //     if(int(((int8_t*)(aux_bufff))[0]) != 119) {
@@ -2252,8 +2251,8 @@ void TransformerEncoder(at::Tensor& input,
             //         break;
             //     }
             // }
-            float a_scale[1024];
-            cudaMemcpy(a_scale, (float*)((int8_t*)aux_buff + bsz1 * input.size(2)), sizeof(float) * 10, cudaMemcpyDeviceToHost);
+            // float a_scale[1024];
+            // cudaMemcpy(a_scale, (float*)((int8_t*)aux_buff + bsz1 * input.size(2)), sizeof(float) * 10, cudaMemcpyDeviceToHost);
             // std::cout << "after launch_me, a_scale[0] = " << (((a_scale))[0]) << std::endl;
 
             run_gemm_int4(aux_buff,
@@ -2267,8 +2266,8 @@ void TransformerEncoder(at::Tensor& input,
                           bsz1,
                           q_scale2.size(0),
                           new_stream);
-            c10::Half buf_11[1024*1024];
-            cudaMemcpy(buf_11, buf_1, sizeof(c10::Half) * 1024*1024, cudaMemcpyDeviceToHost);
+            // c10::Half buf_11[1024*1024];
+            // cudaMemcpy(buf_11, buf_1, sizeof(c10::Half) * 1024*1024, cudaMemcpyDeviceToHost);
             // std::cout << "after int4 gemm, buf_1 = " << ((c10::Half*)(buf_11))[0] << std::endl;
             // for(int i = 0; i < 1024*1024; i++) {
                 // if (((c10::Half*)(buf_11))[i] != 784) {
@@ -2380,24 +2379,6 @@ void TransformerEncoder(at::Tensor& input,
                     bsz1,
                     q_scale.size(0),
                     Context::Instance().GetCurrentStream());
-            // launch_bias_gelu_int8((int8_t*)aux_buff,
-            //                     (float*)((int8_t*)aux_buff + bsz1 * out_size),
-            //                     (__half*)aux_buff1,
-            //                     (__half*)mlp_biases[0].data_ptr(),
-            //                     out_size,
-            //                     bsz_seq,
-            //                     Context::Instance().GetCurrentStream());
-            // run_gemm(aux_buff,
-            //         mlp_weights[1].data_ptr(),
-            //         (T*)buf_5,
-            //         (float*)((int8_t*)aux_buff + bsz1 * out_size),
-            //         q_scale.data_ptr(),
-            //         bsz1,
-            //         mlp_weights[1].size(0),
-            //         out_size,
-            //         bsz1,
-            //         q_scale.size(0),
-            //         Context::Instance().GetCurrentStream());
         }
     } else {
         cublas_gemm_ex(cub_handle,
