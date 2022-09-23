@@ -532,15 +532,15 @@ class DeepSpeedMLPFunction(Function):
                                    inter_w.scale,
                                    config.q_int8,
                                    config.mlp_act_func_type)
-        inference_cuda_module.residual_add(output,
-                                           residual,
-                                           input,
-                                           output_b,
-                                           bias if bias is not None else output_b,
-                                           config.mp_size,
-                                           config.mlp_after_attn,
-                                           bias is not None,
-                                           config.pre_layer_norm)
+        residual_add_func(output,
+                          residual,
+                          input,
+                          output_b,
+                          bias if bias is not None else output_b,
+                          config.mp_size,
+                          config.mlp_after_attn,
+                          bias is not None,
+                          config.pre_layer_norm)
         if mp_group is not None and dist.get_world_size(group=mp_group) > 1:
             dist.all_reduce(residual, group=mp_group)
         return residual

@@ -930,17 +930,14 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
     if (q_int8) {
         int out_size = weight.size(0);
 
-        int bsz1 = (bsz >= 32 && bsz < 128)
-                       ? 128
-                       : (bsz % 128 == 0)
-                             ? bsz
-                             : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                                   ? ((bsz % 64 == 0)
-                                          ? bsz
-                                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                : bsz + (64 - (bsz % 64)))
-                                   : bsz + (128 - (bsz % 128));
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+                   : (bsz % 128 == 0)       ? bsz
+                   : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                       ? ((bsz % 64 == 0) ? bsz
+                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                              ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                              : bsz + (64 - (bsz % 64)))
+                       : bsz + (128 - (bsz % 128));
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
@@ -1118,17 +1115,14 @@ at::Tensor ds_linear_layer(at::Tensor& input,
 
     int bsz = input.size(0) * input.size(1);
     if (q_int8) {
-        int bsz1 = (bsz >= 32 && bsz < 128)
-                       ? 128
-                       : (bsz % 128 == 0)
-                             ? bsz
-                             : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                                   ? ((bsz % 64 == 0)
-                                          ? bsz
-                                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                : bsz + (64 - (bsz % 64)))
-                                   : bsz + (128 - (bsz % 128));
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+                   : (bsz % 128 == 0)       ? bsz
+                   : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                       ? ((bsz % 64 == 0) ? bsz
+                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                              ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                              : bsz + (64 - (bsz % 64)))
+                       : bsz + (128 - (bsz % 128));
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
@@ -1207,17 +1201,14 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
     auto output = torch::from_blob(workspace, {input.size(0), input.size(1), out_size}, options);
     int bsz = input.size(0) * input.size(1);
     if (q_int8) {
-        int bsz1 = (bsz >= 32 && bsz < 128)
-                       ? 128
-                       : (bsz % 128 == 0)
-                             ? bsz
-                             : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                                   ? ((bsz % 64 == 0)
-                                          ? bsz
-                                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                : bsz + (64 - (bsz % 64)))
-                                   : bsz + (128 - (bsz % 128));
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+                   : (bsz % 128 == 0)       ? bsz
+                   : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                       ? ((bsz % 64 == 0) ? bsz
+                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                              ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                              : bsz + (64 - (bsz % 64)))
+                       : bsz + (128 - (bsz % 128));
         auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                         8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
@@ -1313,17 +1304,14 @@ void mlp_unfused_cublas(T* output,
                                Context::Instance().GetCurrentStream());
     if (q_int8) {
         int out_size = weight.size(0);
-        int bsz1 = (bsz >= 32 && bsz < 128)
-                       ? 128
-                       : (bsz % 128 == 0)
-                             ? bsz
-                             : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                                   ? ((bsz % 64 == 0)
-                                          ? bsz
-                                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                : bsz + (64 - (bsz % 64)))
-                                   : bsz + (128 - (bsz % 128));
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+                   : (bsz % 128 == 0)       ? bsz
+                   : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                       ? ((bsz % 64 == 0) ? bsz
+                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                              ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                              : bsz + (64 - (bsz % 64)))
+                       : bsz + (128 - (bsz % 128));
         auto auxilary_buf =
             (T*)Context::Instance().GetWorkSpace() +
             8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
@@ -1544,17 +1532,14 @@ at::Tensor fused_gemm_gelu(at::Tensor& input,
     int bsz = input.size(0) * input.size(1);
     if (q_int8) {
         int out_size = weight.size(0);
-        int bsz1 = (bsz >= 32 && bsz < 128)
-                       ? 128
-                       : (bsz % 128 == 0)
-                             ? bsz
-                             : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                                   ? ((bsz % 64 == 0)
-                                          ? bsz
-                                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                : bsz + (64 - (bsz % 64)))
-                                   : bsz + (128 - (bsz % 128));
+        int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+                   : (bsz % 128 == 0)       ? bsz
+                   : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                       ? ((bsz % 64 == 0) ? bsz
+                          : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                              ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                              : bsz + (64 - (bsz % 64)))
+                       : bsz + (128 - (bsz % 128));
         auto auxilary_buf =
             workspace + 8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
         launch_me((int8_t*)auxilary_buf,
@@ -1811,19 +1796,14 @@ void TransformerEncoder(at::Tensor& input,
 
     int bsz_seq = bsz * _seq_length;
 
-    int bsz1 =
-        (bsz_seq >= 32 && bsz_seq < 128)
-            ? 128
-            : (bsz_seq % 128 == 0)
-                  ? bsz_seq
-                  : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
-                        ? ((bsz_seq % 64 == 0)
-                               ? bsz_seq
-                               : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
-                                     ? ((bsz_seq % 32 == 0) ? bsz_seq
-                                                            : bsz_seq + (32 - (bsz_seq % 32)))
-                                     : bsz_seq + (64 - (bsz_seq % 64)))
-                        : bsz_seq + (128 - (bsz_seq % 128));
+    int bsz1 = (bsz_seq >= 32 && bsz_seq < 128) ? 128
+               : (bsz_seq % 128 == 0)           ? bsz_seq
+               : ((128 - (bsz_seq % 128)) > 32 && bsz_seq < 512)
+                   ? ((bsz_seq % 64 == 0) ? bsz_seq
+                      : ((64 - (bsz_seq % 64)) > 32 && bsz_seq < 32)
+                          ? ((bsz_seq % 32 == 0) ? bsz_seq : bsz_seq + (32 - (bsz_seq % 32)))
+                          : bsz_seq + (64 - (bsz_seq % 64)))
+                   : bsz_seq + (128 - (bsz_seq % 128));
     auto aux_buff = (T*)Context::Instance().GetWorkSpace() +
                     8 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2);
 
