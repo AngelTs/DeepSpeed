@@ -55,8 +55,8 @@ def load_model_with_checkpoint(r_module,
                         inner_dim = 1 if tmp_data.dtype == torch.int8 else 0
                         outer_dim = 0 if tmp_data.dtype == torch.int8 else 1
                         if (len(src_shape) == 2 and len(dst_shape) == 2):
-                            if (src_shape[inner_dim] == dst_shape[0]
-                                    and src_shape[outer_dim] == dst_shape[1]):
+                            if (src_shape[inner_dim] == dst_shape[inner_dim]
+                                    and src_shape[outer_dim] == dst_shape[outer_dim]):
                                 if tmp_data.dtype != torch.int8:
                                     p = weight_quantizer.quantize(
                                         transpose(tmp_data) if weight_quantizer.
@@ -68,12 +68,11 @@ def load_model_with_checkpoint(r_module,
                                 setattr(module, n, p)
                             else:
                                 dim = inner_dim if src_shape[inner_dim] != dst_shape[
-                                    0] else outer_dim
-                                dim1 = 0 if src_shape[inner_dim] != dst_shape[0] else 1
-                                if src_shape[dim] > dst_shape[dim1]:
+                                    inner_dim] else outer_dim
+                                if src_shape[dim] > dst_shape[dim]:
                                     weight_partition = torch.split(
                                         tmp_data,
-                                        dst_shape[dim1],
+                                        dst_shape[dim],
                                         dim=dim)[rank].to(torch.cuda.current_device())
                                     assert tmp_data.dtype != torch.int8 or scale.numel() > weight_quantizer.num_groups * (rank+1), \
                                         '''ERROR: We require the quantization scales for larger TP-size when loading INT8 checkpoint!\
