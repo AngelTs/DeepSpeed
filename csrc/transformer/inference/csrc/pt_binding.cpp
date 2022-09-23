@@ -702,10 +702,6 @@ std::vector<at::Tensor> ds_softmax_context(at::Tensor& query_key_value,
     auto query_cont = workspace + 8 * buf_size;
     size_t offset = 16 * (hidden_dim * bsz * Context::Instance().GetMaxTokenLenght()) +
                     layer_id * 2 * bsz * Context::Instance().GetMaxTokenLenght() * hidden_dim;
-<<<<<<< HEAD
-=======
-
->>>>>>> [squash] staging ds azure v3 (#344)
     unsigned all_tokens = soft_len;
     auto kv_cache = workspace + offset + (hidden_dim / heads) * (is_prompt ? 0 : soft_len - 1);
     size_t value_offset = bsz * Context::Instance().GetMaxTokenLenght() * hidden_dim;
