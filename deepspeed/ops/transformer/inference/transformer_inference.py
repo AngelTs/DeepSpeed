@@ -301,7 +301,7 @@ class DeepSpeedSelfAttentionFunction(Function):
             attn_key_value = score_context_func(
                 qkv_out,
                 ((1 - input_mask).to(qkv_out.dype) *
-                         minus_inf) if input_mask.dtype == torch.int64 else input_mask,
+                 minus_inf) if input_mask.dtype == torch.int64 else input_mask,
                 config.rotary_dim,
                 config.rotate_half,
                 config.rotate_every_two,

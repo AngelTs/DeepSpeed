@@ -273,4 +273,3 @@ template void launch_apply_rotary_pos_emb<__half>(__half*,
                                                   bool,
                                                   cudaStream_t,
                                                   int);
-
