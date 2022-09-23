@@ -126,10 +126,8 @@ __global__ void apply_rotary_pos_emb1(float* mixed_query,
 
     unsigned seq_index = head_id % seq_len;
     unsigned seq_id = (head_id / num_heads) % seq_len + seq_offset;
-    unsigned seq_index = head_id % seq_len;
     unsigned k_offset = (seq_index + (head_id / seq_len) * max_out_tokens) * head_size;
 
-    unsigned k_offset = (seq_index + (head_id / seq_len) * max_out_tokens) * head_size;
     if (head_id < total_count) {
         while (lane < rotary_dim) {
             float inv_freq = (float)((lane / 2) * 2) / (float)rotary_dim;

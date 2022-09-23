@@ -230,9 +230,6 @@ void launch_bias_add_transform_0213(T* outputs,
                                     bool rotate_every_two,
                                     cudaStream_t stream,
                                     int trans_count,
-<<<<<<< HEAD
-                                    int max_out_tokens);
-=======
                                     int max_out_tokens);
 template <typename T>
 void launch_transform_scale(T* vals,
@@ -341,4 +338,3 @@ void launch_bias_residual1(T* input,
                            int intermediate_size,
                            bool preln,
                            cudaStream_t stream);
->>>>>>> [squash] staging ds azure v3 (#344)

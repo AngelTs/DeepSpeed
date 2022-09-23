@@ -177,8 +177,7 @@ void launch_transform_scale<__half>(__half* vals,
 }
 
 // Bias add
-// TODO: Reza fix this up after rebase, sync definition w. public master that includes k/v cache,
-// etc.
+
 __global__ void bias_add_transform_0213(float* output,
                                         float* k_cache,
                                         float* v_cache,
@@ -187,11 +186,12 @@ __global__ void bias_add_transform_0213(float* output,
                                         int hidden_dim,
                                         int seq_length,
                                         unsigned seq_offset,
-                                        int all_tokens,
                                         int heads,
+                                        int rotary_dim,
+                                        bool rotate_half,
+                                        bool rotate_every_two,
                                         int head_ext,
-                                        size_t max_token_length)
-
+                                        int max_out_tokens)
 {
     int d0_stride = hidden_dim * seq_length;
     int d1_stride = hidden_dim;
@@ -207,14 +207,36 @@ __global__ void bias_add_transform_0213(float* output,
     int d0_out_stride = hidden_dim * (cnt == 0 ? seq_length : max_out_tokens);
 
     const float4* vals_vec = reinterpret_cast<const float4*>(vals);
-    const float4* bias_vec = reinterpret_cast<const float4*>(bias);
     float4* output_vec =
         reinterpret_cast<float4*>(cnt == 0 ? output : (cnt == 1 ? k_cache : v_cache));
 
-    float4 inputs = vals_vec[d0 * d0_stride * (gridDim.z / head_ext) + cnt * d1_stride +
-                             d1 * d1_stride * (gridDim.z / head_ext) + d2 * d2_stride + d3];
+    vals_vec += (d0 * d0_stride * (gridDim.z / head_ext));
+    vals_vec += (d1 * d1_stride * (gridDim.z / head_ext));
+    vals_vec += (cnt * d1_stride);
+    vals_vec += (d2 * d2_stride);
 
-    output_vec[d0 * d0_out_stride + d1 * d1_out_stride + d2 * d2_out_stride + d3] = inputs;
+    output_vec += (d1 * d2_stride);
+    output_vec += (d0 * d0_out_stride);
+    output_vec += (d2 * d2_out_stride);
+
+    unsigned seq_id = d1 + seq_offset;
+    float4 inputs = vals_vec[d3];
+    int lane = d3 & 0x1f;
+    if (cnt < 2 && rotary_dim > 0 && d3 < rotary_dim) {
+        float4 q = vals_vec[d3];
+        float2* q_f = reinterpret_cast<float2*>(&q);
+        if (rotate_every_two) {
+#pragma unroll
+            for (int o = 0; o < 2; o++) {
+                float inv_freq = (float)(((d3 << 1) + o) * 2) / (float)(rotary_dim << 2);
+                inv_freq = 1.0 / powf(10000.0, inv_freq) * (float)seq_id;
+                q_f[o].x = (-1.0 * q_f[o].y * sinf(inv_freq) + q_f[o].x * cosf(inv_freq));
+                q_f[o].y = (q_f[o].x * sinf(inv_freq) + q_f[o].y * cosf(inv_freq));
+            }
+        }
+        output_vec[d3] = q;
+    } else
+        output_vec[d3] = inputs;
 }
 
 #define ATTN_H 3
@@ -330,7 +352,6 @@ void launch_bias_add_transform_0213<float>(float* output,
                                                                 hidden_dim,
                                                                 seq_length,
                                                                 seq_offset,
-                                                                all_tokens,
                                                                 heads,
                                                                 rotary_dim >> 2,
                                                                 rotate_half,
@@ -338,6 +359,7 @@ void launch_bias_add_transform_0213<float>(float* output,
                                                                 head_ext,
                                                                 max_out_tokens);
 }
+
 template <typename T>
 void launch_bias_add_transform_0213(T* outputs,
                                     T* vals,

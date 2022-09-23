@@ -131,8 +131,6 @@ public:
     }
     inline size_t GetMaxTokenLenght() const { return _max_seq_len; }
 
-    inline size_t GetMaxTokenLenght() const { return _max_seq_len; }
-
     cudaEvent_t GetCompEvent(int id) { return id == 1 ? _comp1_event : _comp2_event; }
 
     size_t get_workspace_size() const { return _workSpaceSize; }
@@ -207,8 +205,6 @@ private:
 
     size_t _workSpaceSize;
     size_t _free_memory_size;
-
-    size_t _max_seq_len;
 
     cudaEvent_t _comp1_event;
     cudaEvent_t _comp2_event;
