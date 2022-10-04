@@ -11,7 +11,9 @@ def load_model_with_checkpoint(r_module,
                                mp_replace,
                                ckpt_type,
                                weight_quantizer=None,
-                               rank=0):
+                               rank=0,
+                               transformer_config=None,
+                               param_names=None):
     error_msgs = []
 
     def transpose(data):
@@ -38,6 +40,27 @@ def load_model_with_checkpoint(r_module,
         gc.collect()
 
     def load_transformer_layer(module, prefix):
+        def _transpose(x, mp_size=1):
+            num_attention_heads_per_partition = transformer_config.heads // mp_size
+            attention_head_size = x.shape[-1] // num_attention_heads_per_partition
+            new_x_shape = x.size()[:-1] + (num_attention_heads_per_partition,
+                                           attention_head_size)
+            x_1 = x.view(*new_x_shape)
+            (q, k, v) = torch.split(x_1, (x_1.shape[-1] // 3), dim=(x_1.dim() - 1))
+            if len(q.shape) > 2:
+                return torch.cat((q.reshape(q.shape[0],
+                                            -1),
+                                  k.reshape(q.shape[0],
+                                            -1),
+                                  v.reshape(q.shape[0],
+                                            -1)),
+                                 dim=-1).reshape(x.shape)
+            else:
+                return torch.cat((q.reshape(-1),
+                                  k.reshape(-1),
+                                  v.reshape(-1)),
+                                 dim=-1).reshape(x.shape)
+
         if ckpt_type == "tp":
 
             def load_parameters(module, prefix):
@@ -54,9 +77,14 @@ def load_model_with_checkpoint(r_module,
                         dst_shape = p.shape
                         inner_dim = 1 if tmp_data.dtype == torch.int8 else 0
                         outer_dim = 0 if tmp_data.dtype == torch.int8 else 1
+                        qkv = 'attn_qkvw' in n or 'attn_qkvb' in n
+                        if qkv:
+                            tmp_data = _transpose(
+                                tmp_data,
+                                transformer_config.mp_size).contiguous()
                         if (len(src_shape) == 2 and len(dst_shape) == 2):
-                            if (src_shape[inner_dim] == dst_shape[inner_dim]
-                                    and src_shape[outer_dim] == dst_shape[outer_dim]):
+                            if (src_shape[inner_dim] == dst_shape[0]
+                                    and src_shape[outer_dim] == dst_shape[1]):
                                 if tmp_data.dtype != torch.int8:
                                     p = weight_quantizer.quantize(
                                         transpose(tmp_data) if weight_quantizer.
@@ -68,11 +96,12 @@ def load_model_with_checkpoint(r_module,
                                 setattr(module, n, p)
                             else:
                                 dim = inner_dim if src_shape[inner_dim] != dst_shape[
-                                    inner_dim] else outer_dim
-                                if src_shape[dim] > dst_shape[dim]:
+                                    0] else outer_dim
+                                dim1 = 0 if src_shape[inner_dim] != dst_shape[0] else 1
+                                if src_shape[dim] > dst_shape[dim1]:
                                     weight_partition = torch.split(
                                         tmp_data,
-                                        dst_shape[dim],
+                                        dst_shape[dim1],
                                         dim=dim)[rank].to(torch.cuda.current_device())
                                     assert tmp_data.dtype != torch.int8 or scale.numel() > weight_quantizer.num_groups * (rank+1), \
                                         '''ERROR: We require the quantization scales for larger TP-size when loading INT8 checkpoint!\
@@ -106,7 +135,8 @@ def load_model_with_checkpoint(r_module,
 
                                 if tmp_data.dtype != torch.int8:
                                     weight_partition = weight_quantizer.quantize(
-                                        transpose(weight_partition), \
+                                        transpose(_transpose(weight_partition,
+                                                             transformer_config.mp_size) if qkv else weight_partition), \
                                         parallel_dim=(0 if dim == 1 else 1)) if weight_quantizer.q_int8 else \
                                         weight_quantizer.quantize(weight_partition)
                                 else:
@@ -126,46 +156,53 @@ def load_model_with_checkpoint(r_module,
                                             torch.cuda.current_device()).contiguous()
                                     p.data.copy_(bias_split)
                                 else:
+                                    tmp_data = torch.cat(
+                                        [sd[j][prefix + n] for j in range(len(sd))],
+                                        dim=0).to(
+                                            torch.cuda.current_device()).contiguous()
                                     p.data.copy_(
-                                        torch.cat(
-                                            [sd[j][prefix + n] for j in range(len(sd))],
-                                            dim=0).to(torch.cuda.current_device()).
-                                        contiguous())
+                                        _transpose(tmp_data,
+                                                   transformer_config.mp_size
+                                                   ) if qkv else tmp_data)
 
             load_parameters(module, prefix)
             for n, child in module.named_children():
                 load_parameters(child, prefix + n + '.')
         else:
-            module.norm_w.data.copy_(sd[0][prefix + 'input_layernorm.' + 'weight'])
-            module.norm_b.data.copy_(sd[0][prefix + 'input_layernorm.' + 'bias'])
-            module.attention.attn_qkvw = mp_replace.copy(module.attention.attn_qkvw,
-                weight_quantizer.quantize(sd[0][prefix + 'self_attention.query_key_value.' + 'weight']) if weight_quantizer.q_int8 else \
-                weight_quantizer.quantize(transpose(sd[0][prefix + 'self_attention.query_key_value.' + 'weight'])))
-            module.attention.attn_qkvb = mp_replace.copy(
-                module.attention.attn_qkvb.data,
-                sd[0][prefix + 'self_attention.query_key_value.' + 'bias'])
-            module.attention.attn_ow = mp_replace.copy(module.attention.attn_ow,
-                weight_quantizer.quantize(sd[0][prefix + 'self_attention.dense.' + 'weight']) if weight_quantizer.q_int8 else \
-                weight_quantizer.quantize(transpose(sd[0][prefix + 'self_attention.dense.' + 'weight'])))
-            module.attention.attn_ob = mp_replace.copy(
-                module.attention.attn_ob.data,
-                sd[0][prefix + 'self_attention.dense.' + 'bias'])
-            module.mlp.attn_nw.data.copy_(sd[0][prefix + 'post_attention_layernorm.' +
-                                                'weight'])
-            module.mlp.attn_nb.data.copy_(sd[0][prefix + 'post_attention_layernorm.' +
-                                                'bias'])
-            module.mlp.inter_w = mp_replace.copy(module.mlp.inter_w,
-                weight_quantizer.quantize(sd[0][prefix + 'mlp.dense_h_to_4h.' + 'weight']) if weight_quantizer.q_int8 else \
-                weight_quantizer.quantize(transpose(sd[0][prefix + 'mlp.dense_h_to_4h.' + 'weight'])))
-            module.mlp.inter_b = mp_replace.copy(
-                module.mlp.inter_b.data,
-                sd[0][prefix + 'mlp.dense_h_to_4h.' + 'bias'])
-            module.mlp.output_w = mp_replace.copy(module.mlp.output_w,
-                weight_quantizer.quantize(sd[0][prefix + 'mlp.dense_4h_to_h.' + 'weight']) if weight_quantizer.q_int8 else \
-                weight_quantizer.quantize(transpose(sd[0][prefix + 'mlp.dense_4h_to_h.' + 'weight'])))
-            module.mlp.output_b = mp_replace.copy(
-                module.mlp.output_b.data,
-                sd[0][prefix + 'mlp.dense_4h_to_h.' + 'bias'])
+
+            def maybe_copy(module, dst_name, src_name, qkv=False):
+                if src_name in sd[0]:
+                    dst = getattr(module, dst_name)
+                    if len(dst.shape) == 1:
+                        if qkv:
+                            dst = mp_replace.qkv_copy(
+                                dst,
+                                _transpose(sd[0][src_name]).contiguous())
+                        else:
+                            dst = mp_replace.copy(dst, sd[0][src_name])
+                    else:
+                        if qkv:
+                            dst = weight_quantizer.quantize(mp_replace.qkv_copy(dst, sd[0][src_name] if weight_quantizer.q_int8 else \
+                                                            (_transpose(transpose(sd[0][src_name])).contiguous())))
+                        else:
+                            dst = weight_quantizer.quantize(mp_replace.copy(dst, sd[0][src_name] if weight_quantizer.q_int8 else \
+                                                            transpose(sd[0][src_name])))
+                    setattr(module, dst_name, dst)
+            qkv_w, qkv_b, attn_ow, attn_ob, \
+            mlp_intw, mlp_intb, mlp_ow, mlp_ob, \
+            inp_normw, inp_normb, attn_nw, attn_nb = param_names
+            maybe_copy(module, 'norm_w', prefix + inp_normw)
+            maybe_copy(module, 'norm_b', prefix + inp_normb)
+            maybe_copy(module.attention, 'attn_qkvw', prefix + qkv_w, qkv=True)
+            maybe_copy(module.attention, 'attn_qkvb', prefix + qkv_b, qkv=True)
+            maybe_copy(module.attention, 'attn_ow', prefix + attn_ow)
+            maybe_copy(module.attention, 'attn_ob', prefix + attn_ob)
+            maybe_copy(module.mlp, 'attn_nw', prefix + attn_nw)
+            maybe_copy(module.mlp, 'attn_nb', prefix + attn_nb)
+            maybe_copy(module.mlp, 'inter_w', prefix + mlp_intw)
+            maybe_copy(module.mlp, 'inter_b', prefix + mlp_intb)
+            maybe_copy(module.mlp, 'output_w', prefix + mlp_ow)
+            maybe_copy(module.mlp, 'output_b', prefix + mlp_ob)
 
     layer_policies = {
         nn.Linear: load,

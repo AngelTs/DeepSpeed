@@ -43,7 +43,6 @@ class ReplaceWithTensorSlicing:
                                     dim=0)
         else:
             src_split = torch.split(src.data, src.shape[-1] // 3, dim=-1)
-
         if (len(src_shape) == 2 and len(dst_shape) == 2):
             if src_shape[outer_dim] == dst_shape[self.out_dim]:
                 dst = src
@@ -193,6 +192,10 @@ class GroupQuantizer:
         return out
 
 
+transformer_config_g = None
+selected_policy_g = None
+
+
 def replace_transformer_layer(orig_layer_impl,
                               model,
                               policy=None,
@@ -267,6 +270,9 @@ def replace_transformer_layer(orig_layer_impl,
                             inference=False,
                             layer_id=0):
         policy = policy_cls(child, inference=inference)
+        global selected_policy_g
+        if selected_policy_g is None:
+            selected_policy_g = policy
         if not policy.cuda_graph_supported:
             # policy says cuda graph is not supported raise an error if set
             assert not enable_cuda_graph, "cuda graph is not supported with this model, please disable"
@@ -367,6 +373,9 @@ def replace_transformer_layer(orig_layer_impl,
                     bigscience_bloom=bigscience_bloom,
                     enable_qkv_quantization=enable_qkv_quantization)
 
+                global transformer_config_g
+                if transformer_config_g is None:
+                    transformer_config_g = transformer_config
             if quantize and quantize_settings is not None:
                 (quantization_scales,
                  merge_count,
@@ -474,7 +483,7 @@ def replace_transformer_layer(orig_layer_impl,
                 dense_w.data = transpose(dense_w.data)
 
             def _transpose(x):
-                num_attention_heads_per_partition = transformer_config.heads // transformer_config.mp_size
+                num_attention_heads_per_partition = transformer_config.heads
                 attention_head_size = x.shape[-1] // num_attention_heads_per_partition
                 new_x_shape = x.size()[:-1] + (num_attention_heads_per_partition,
                                                attention_head_size)
@@ -494,10 +503,9 @@ def replace_transformer_layer(orig_layer_impl,
                                       v.reshape(-1)),
                                      dim=-1).reshape(x.shape)
 
-            if megatron_v2:
+            if megatron_v2 or (bigscience_bloom and not qkvw.is_meta):
                 new_module.config.rotate_half = True
                 new_module.config.rotate_every_two = False
-
                 # Note: this part needs to be added for BLOOM architecture
                 qkvw = torch.nn.parameter.Parameter(_transpose(qkvw).contiguous())
                 qkvb = torch.nn.parameter.Parameter(_transpose(qkvb).contiguous())
@@ -563,12 +571,12 @@ def replace_transformer_layer(orig_layer_impl,
                         attn_block.attn_ow = mp_replace.copy(attn_block.attn_ow, dense_w)
                         attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
             else:
-                attn_block.attn_qkvw = quantizer.quantize(
-                    mp_replace.copy(attn_block.attn_qkvw, qkvw, int8=enable_qkv_quantization) if bigscience_bloom else \
-                    mp_replace.qkv_copy(attn_block.attn_qkvw, qkvw, int8=enable_qkv_quantization),
-                    qkv=enable_qkv_quantization)
+                attn_block.attn_qkvw = quantizer.quantize(mp_replace.qkv_copy(
+                    attn_block.attn_qkvw,
+                    qkvw,
+                    int8=enable_qkv_quantization),
+                                                          qkv=enable_qkv_quantization)
                 attn_block.attn_qkvb = \
-                    mp_replace.copy(attn_block.attn_qkvb, qkvb) if bigscience_bloom else \
                     mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
                 attn_block.attn_ow = quantizer.quantize(
@@ -902,6 +910,8 @@ def replace_transformer_layer(orig_layer_impl,
                     mp_replace,
                     ckpt_type,
                     quantizer,
+                    transformer_config=transformer_config_g,
+                    param_names=selected_policy_g.get_param_names(),
                 )
                 pbar.update(1)
         else:
@@ -926,12 +936,15 @@ def replace_transformer_layer(orig_layer_impl,
                     torch.load(ckpt_file,
                                map_location='cpu') for ckpt_file in ckpt_files
                 ]
-                load_model_with_checkpoint(replaced_module,
-                                           sds,
-                                           mp_replace,
-                                           ckpt_type,
-                                           quantizer,
-                                           int(rank % tp_split_size))
+                load_model_with_checkpoint(
+                    replaced_module,
+                    sds,
+                    mp_replace,
+                    ckpt_type,
+                    quantizer,
+                    int(rank % tp_split_size),
+                    transformer_config=transformer_config_g,
+                    param_names=selected_policy_g.get_param_names())
                 sds = [None for _ in sds]
                 gc.collect()
 
@@ -946,12 +959,15 @@ def replace_transformer_layer(orig_layer_impl,
                                              checkpoint["non_tp"][i]
                                              ) if base_dir1 else checkpoint["non_tp"][i]
                     sds = [torch.load(ckpt_file, map_location='cpu')]
-                    load_model_with_checkpoint(replaced_module,
-                                               sds,
-                                               mp_replace,
-                                               ckpt_type,
-                                               quantizer,
-                                               int(rank % tp_split_size))
+                    load_model_with_checkpoint(
+                        replaced_module,
+                        sds,
+                        mp_replace,
+                        ckpt_type,
+                        quantizer,
+                        int(rank % tp_split_size),
+                        transformer_config=transformer_config_g,
+                        param_names=selected_policy_g.get_param_names())
                     sds = [None for _ in sds]
                     gc.collect()
         print(f"checkpoint loading time at rank {rank}: {time.time()-start_time} sec")

@@ -62,6 +62,9 @@ class DSPolicy(ABC):
         """
         raise NotImplementedError
 
+    def get_param_names(self):
+        raise NotImplementedError
+
 
 class HFBertLayerPolicy(DSPolicy):
     _orig_layer_class = None
@@ -378,6 +381,20 @@ class BLOOMLayerPolicy(DSPolicy):
                self.client_module.input_layernorm.weight, \
                self.client_module.input_layernorm.bias
 
+    def get_param_names(self):
+        return 'self_attention.query_key_value.weight', \
+               'self_attention.query_key_value.bias', \
+               'self_attention.dense.weight', \
+               'self_attention.dense.bias', \
+               'mlp.dense_h_to_4h.weight', \
+               'mlp.dense_h_to_4h.bias', \
+               'mlp.dense_4h_to_h.weight', \
+               'mlp.dense_4h_to_h.bias', \
+               'input_layernorm.weight', \
+               'input_layernorm.bias', \
+               'post_attention_layernorm.weight', \
+               'post_attention_layernorm.bias',
+
 
 class GPTNEOXLayerPolicy(DSPolicy):
     _orig_layer_class = None
@@ -431,6 +448,20 @@ class GPTNEOXLayerPolicy(DSPolicy):
                self.client_module.post_attention_layernorm.bias, \
                self.client_module.input_layernorm.weight, \
                self.client_module.input_layernorm.bias
+
+    def get_param_names(self):
+        return 'attention.query_key_value.weight', \
+               'attention.query_key_value.bias', \
+               'attention.dense.weight', \
+               'attention.dense.bias', \
+               'mlp.dense_h_to_4h.weight', \
+               'mlp.dense_h_to_4h.bias', \
+               'mlp.dense_4h_to_h.weight', \
+               'mlp.dense_4h_to_h.bias', \
+               'input_layernorm.weight', \
+               'input_layernorm.bias', \
+               'post_attention_layernorm.weight', \
+               'post_attention_layernorm.bias',
 
 
 class HFOPTLayerPolicy(DSPolicy):
@@ -497,6 +528,7 @@ class HFDistilBertLayerPolicy(DSPolicy):
         super().__init__(inference)
         self.client_module = client_module
         self.preln = preln
+        self.cuda_graph_supported = True
         if HFDistilBertLayerPolicy._orig_layer_class is None:
             try:
                 import transformers

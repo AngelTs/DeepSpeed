@@ -89,7 +89,6 @@ public:
                       const size_t& batch_size,
                       const size_t& hidden_dim,
                       const unsigned& mp_size,
-                      const bool& external_cache,
                       const size_t& elem_size,
                       const unsigned& rank)
     {
@@ -99,11 +98,11 @@ public:
         size_t activation_size = 16 * hidden_dim * batch_size;
         size_t cache_size = num_layers * batch_size * (hidden_dim / mp_size) * 2;
         _max_seq_len =
-            (((_free_memory_size - (_free_memory_size > GIGABYTE ? 500 : 100) * MEGABYTE) /
+            (((_free_memory_size -
+               (_free_memory_size > GIGABYTE ? (size_t)GIGABYTE * 3 : 200 * (size_t)MEGABYTE)) /
               elem_size)) /
             (activation_size + cache_size);
-        size_t workSpaceSize = (external_cache ? activation_size : (activation_size + cache_size)) *
-                               _max_seq_len * elem_size;
+        size_t workSpaceSize = (activation_size + cache_size) * _max_seq_len * elem_size;
         _max_seq_len = std::min((size_t)MAX_OUT_TOKENS, _max_seq_len);
         if (rank == 0 && !_workspace)
             printf(
