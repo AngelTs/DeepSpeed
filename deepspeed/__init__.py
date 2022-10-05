@@ -1,6 +1,6 @@
-'''
+"""
 Copyright 2020 The Microsoft DeepSpeed Team
-'''
+"""
 
 import sys
 import types
@@ -13,7 +13,11 @@ from packaging import version as pkg_version
 from . import ops
 from . import module_inject
 
-from .runtime.engine import DeepSpeedEngine, DeepSpeedOptimizerCallable, DeepSpeedSchedulerCallable
+from .runtime.engine import (
+    DeepSpeedEngine,
+    DeepSpeedOptimizerCallable,
+    DeepSpeedSchedulerCallable,
+)
 from .runtime.engine import ADAM_OPTIMIZER, LAMB_OPTIMIZER
 from .runtime.pipe.engine import PipelineEngine
 from .inference.engine import InferenceEngine
@@ -36,7 +40,7 @@ from .git_version_info import version, git_hash, git_branch
 
 
 def _parse_version(version_str):
-    '''Parse a version string and extract the major, minor, and patch versions.'''
+    """Parse a version string and extract the major, minor, and patch versions."""
     ver = pkg_version.parse(version_str)
     return ver.major, ver.minor, ver.micro
 
@@ -48,19 +52,19 @@ __git_hash__ = git_hash
 __git_branch__ = git_branch
 
 
-def initialize(args=None,
-               model: torch.nn.Module = None,
-               optimizer: Optional[Union[Optimizer,
-                                         DeepSpeedOptimizerCallable]] = None,
-               model_parameters: Optional[torch.nn.Module] = None,
-               training_data: Optional[torch.utils.data.Dataset] = None,
-               lr_scheduler: Optional[Union[_LRScheduler,
-                                            DeepSpeedSchedulerCallable]] = None,
-               mpu=None,
-               dist_init_required: Optional[bool] = None,
-               collate_fn=None,
-               config=None,
-               config_params=None):
+def initialize(
+    args=None,
+    model: torch.nn.Module = None,
+    optimizer: Optional[Union[Optimizer, DeepSpeedOptimizerCallable]] = None,
+    model_parameters: Optional[torch.nn.Module] = None,
+    training_data: Optional[torch.utils.data.Dataset] = None,
+    lr_scheduler: Optional[Union[_LRScheduler, DeepSpeedSchedulerCallable]] = None,
+    mpu=None,
+    dist_init_required: Optional[bool] = None,
+    collate_fn=None,
+    config=None,
+    config_params=None,
+):
     """Initialize the DeepSpeed Engine.
 
     Arguments:
@@ -109,11 +113,12 @@ def initialize(args=None,
         * ``lr_scheduler``: Wrapped lr scheduler if user ``lr_scheduler`` is passed, or
           if ``lr_scheduler`` specified in JSON configuration. Otherwise ``None``.
     """
-    log_dist("DeepSpeed info: version={}, git-hash={}, git-branch={}".format(
-        __version__,
-        __git_hash__,
-        __git_branch__),
-             ranks=[0])
+    log_dist(
+        "DeepSpeed info: version={}, git-hash={}, git-branch={}".format(
+            __version__, __git_hash__, __git_branch__
+        ),
+        ranks=[0],
+    )
 
     # Disable zero.Init context if it's currently enabled
     zero.partition_parameters.shutdown_init_context()
@@ -121,36 +126,40 @@ def initialize(args=None,
     assert model is not None, "deepspeed.initialize requires a model"
 
     if not isinstance(model, PipelineModule):
-        engine = DeepSpeedEngine(args=args,
-                                 model=model,
-                                 optimizer=optimizer,
-                                 model_parameters=model_parameters,
-                                 training_data=training_data,
-                                 lr_scheduler=lr_scheduler,
-                                 mpu=mpu,
-                                 dist_init_required=dist_init_required,
-                                 collate_fn=collate_fn,
-                                 config=config,
-                                 config_params=config_params)
+        engine = DeepSpeedEngine(
+            args=args,
+            model=model,
+            optimizer=optimizer,
+            model_parameters=model_parameters,
+            training_data=training_data,
+            lr_scheduler=lr_scheduler,
+            mpu=mpu,
+            dist_init_required=dist_init_required,
+            collate_fn=collate_fn,
+            config=config,
+            config_params=config_params,
+        )
     else:
         assert mpu is None, "mpu must be None with pipeline parallelism"
-        engine = PipelineEngine(args=args,
-                                model=model,
-                                optimizer=optimizer,
-                                model_parameters=model_parameters,
-                                training_data=training_data,
-                                lr_scheduler=lr_scheduler,
-                                mpu=model.mpu(),
-                                dist_init_required=dist_init_required,
-                                collate_fn=collate_fn,
-                                config=config,
-                                config_params=config_params)
+        engine = PipelineEngine(
+            args=args,
+            model=model,
+            optimizer=optimizer,
+            model_parameters=model_parameters,
+            training_data=training_data,
+            lr_scheduler=lr_scheduler,
+            mpu=model.mpu(),
+            dist_init_required=dist_init_required,
+            collate_fn=collate_fn,
+            config=config,
+            config_params=config_params,
+        )
 
     return_items = [
         engine,
         engine.optimizer,
         engine.training_dataloader,
-        engine.lr_scheduler
+        engine.lr_scheduler,
     ]
     return tuple(return_items)
 
@@ -168,40 +177,43 @@ def _add_core_arguments(parser):
     Return:
         parser: Updated Parser
     """
-    group = parser.add_argument_group('DeepSpeed', 'DeepSpeed configurations')
+    group = parser.add_argument_group("DeepSpeed", "DeepSpeed configurations")
 
     group.add_argument(
-        '--deepspeed',
+        "--deepspeed",
         default=False,
-        action='store_true',
-        help=
-        'Enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)')
-
-    group.add_argument('--deepspeed_config',
-                       default=None,
-                       type=str,
-                       help='DeepSpeed json configuration file.')
-
-    group.add_argument(
-        '--deepscale',
-        default=False,
-        action='store_true',
-        help=
-        'Deprecated enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)'
+        action="store_true",
+        help="Enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)",
     )
 
-    group.add_argument('--deepscale_config',
-                       default=None,
-                       type=str,
-                       help='Deprecated DeepSpeed json configuration file.')
+    group.add_argument(
+        "--deepspeed_config",
+        default=None,
+        type=str,
+        help="DeepSpeed json configuration file.",
+    )
 
     group.add_argument(
-        '--deepspeed_mpi',
+        "--deepscale",
         default=False,
-        action='store_true',
-        help=
-        "Run via MPI, this will attempt to discover the necessary variables to initialize torch "
-        "distributed from the MPI environment")
+        action="store_true",
+        help="Deprecated enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)",
+    )
+
+    group.add_argument(
+        "--deepscale_config",
+        default=None,
+        type=str,
+        help="Deprecated DeepSpeed json configuration file.",
+    )
+
+    group.add_argument(
+        "--deepspeed_mpi",
+        default=False,
+        action="store_true",
+        help="Run via MPI, this will attempt to discover the necessary variables to initialize torch "
+        "distributed from the MPI environment",
+    )
 
     return parser
 
@@ -222,30 +234,33 @@ def add_config_arguments(parser):
     return parser
 
 
-def init_inference(model,
-                   triangular_masking=True,
-                   mp_size=1,
-                   training_mp_size=1,
-                   mpu=None,
-                   ep_group=None,
-                   expert_mp_group=None,
-                   checkpoint=None,
-                   dtype=None,
-                   injection_policy=None,
-                   replace_method='auto',
-                   quantize=False,
-                   quantize_bits=8,
-                   quantization_setting=32,
-                   replace_with_kernel_inject=False,
-                   return_tuple=True,
-                   ep_size=1,
-                   moe=False,
-                   moe_experts=1,
-                   moe_type='standard',
-                   args=None,
-                   enable_cuda_graph=False,
-                   save_mp_checkpoint_path=None,
-                   enable_qkv_quantization=False):
+def init_inference(
+    model,
+    triangular_masking=True,
+    mp_size=1,
+    training_mp_size=1,
+    mpu=None,
+    ep_group=None,
+    expert_mp_group=None,
+    checkpoint=None,
+    dtype=None,
+    injection_policy=None,
+    replace_method="auto",
+    quantize=False,
+    quantize_bits=8,
+    quantization_setting=32,
+    replace_with_kernel_inject=False,
+    return_tuple=True,
+    ep_size=1,
+    moe=False,
+    moe_experts=1,
+    moe_type="standard",
+    args=None,
+    enable_cuda_graph=False,
+    save_mp_checkpoint_path=None,
+    base_dir="",
+    enable_qkv_quantization=False,
+):
     """Initialize the DeepSpeed InferenceEngine.
 
     Arguments:
@@ -281,40 +296,56 @@ def init_inference(model,
             of groups used in quantization. A tuple is passed in if we want to mention that there is extra-grouping
             for the MLP part of a Transformer layer (e.g. (True, 8) shows we quantize the model using 8 groups for
             all the network except the MLP part that we use 8 extra grouping).
-        replace_with_kernel_inject: If set we inject kernel as we initialize the inference-engine
+        replace_with_kernel_inject: this flag need to be set to true to inject inference kernels for models such as, Bert, GPT2, GPT-Neo and GPT-J. Otherwise,
+            the injection_dict provides the names of two linear layers as a tuple: (attention_output projection, transformer output projection)
+        return_tuple: Specify whether or not the transformer layers need to return a tuple or a Tensor. It is set to True by default (returning a tuple).
+        ep_size: The expert-parallelism size which is used for partitioning the experts across the GPUs in the expert-parallel group.
+        moe: Specify if the type of Transformer is MoE. It is set to False by default.
+        moe_experts: The global number of experts used in an MoE layer.
+        moe_type: Specify the type of MoE layer. We have two types of MoE layer: 'Standard' and 'Residual'. It is set to 'Standard' type by default.
+        args: All the arguments used for launching the inference api that can be useful at the inference-engine for injecting the optimizations.
+        enable_cuda_graph: use this flag for capturing the CUDA-Graph of the inference ops, so that it can run faster using the graph replay method,
+            this is set to False by default
+        save_mp_checkpoint_path: The path for which we want to save the loaded model with a checkpoint. This feature is used for adjusting the
+            parallelism degree to help alleviate the model loading overhead. It does not save any new checkpoint if no path is passed.
+        base_dir: This shows the root directory under which all the checkpoint files exists. This can be passed through the json config too.
 
     Returns:
         A deepspeed.InferenceEngine wrapped model.
     """
-    log_dist("DeepSpeed info: version={}, git-hash={}, git-branch={}".format(
-        __version__,
-        __git_hash__,
-        __git_branch__),
-             ranks=[0])
+    log_dist(
+        "DeepSpeed info: version={}, git-hash={}, git-branch={}".format(
+            __version__, __git_hash__, __git_branch__
+        ),
+        ranks=[0],
+    )
 
-    engine = InferenceEngine(model,
-                             triangular_masking,
-                             mp_size,
-                             training_mp_size,
-                             ep_size,
-                             mpu,
-                             ep_group,
-                             expert_mp_group,
-                             checkpoint,
-                             dtype,
-                             injection_policy,
-                             return_tuple,
-                             replace_method,
-                             quantize,
-                             quantize_bits,
-                             quantization_setting,
-                             replace_with_kernel_inject,
-                             moe,
-                             moe_experts,
-                             moe_type,
-                             args,
-                             enable_cuda_graph,
-                             save_mp_checkpoint_path,
-                             enable_qkv_quantization)
+    engine = InferenceEngine(
+        model,
+        triangular_masking,
+        mp_size,
+        training_mp_size,
+        ep_size,
+        mpu,
+        ep_group,
+        expert_mp_group,
+        checkpoint,
+        dtype,
+        injection_policy,
+        return_tuple,
+        replace_method,
+        quantize,
+        quantize_bits,
+        quantization_setting,
+        replace_with_kernel_inject,
+        moe,
+        moe_experts,
+        moe_type,
+        args,
+        enable_cuda_graph,
+        save_mp_checkpoint_path,
+        base_dir,
+        enable_qkv_quantization,
+    )
 
     return engine

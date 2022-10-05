@@ -1,7 +1,7 @@
 
 
 #include <limits>
-#include "custom_cuda_layers.h"
+#include "inference_cuda_layers.h"
 
 #include <cuda_profiler_api.h>
 #include <cstdio>

@@ -52,4 +52,4 @@ class InferenceBuilder(CUDAOpBuilder):
         return [f'-L{lib_path}', '-lgemmlib', '-lgemmi4', '-lcurand', f'-Wl,-rpath,{lib_path}']
 
     def include_paths(self):
-        return ['csrc/transformer/inference/includes']
+        return ['csrc/transformer/inference/includes', 'csrc/includes']
