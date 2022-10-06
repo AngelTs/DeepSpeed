@@ -140,8 +140,7 @@ class InferenceEngine(Module):
 
         if self.mpu:
             self.mp_world_size = dist.get_world_size(
-                group=self.mpu.get_model_parallel_group()
-            )
+                group=self.mpu.get_model_parallel_group())
             self.mp_group = mpu.get_model_parallel_group()
         elif self.mp_world_size > 1:
             self._create_model_parallel_group()
@@ -207,9 +206,9 @@ class InferenceEngine(Module):
     def remove_mask_prepare_for_bloom(self):
         if hasattr(self.module, "transformer"):
             if hasattr(self.module.transformer, "_prepare_attn_mask"):
-                self.module.transformer._prepare_attn_mask = (
-                    lambda attention_mask, *args, **kwargs: attention_mask
-                )
+                self.module.transformer._prepare_attn_mask = (lambda attention_mask,
+                                                              *args,
+                                                              **kwargs: attention_mask)
 
     def _pre_forward_hook(self, module, *inputs, **kwargs):
         torch.cuda.synchronize()
@@ -247,11 +246,8 @@ class InferenceEngine(Module):
             num_ep_groups = dist.get_world_size() // moe_ep_size
             for i in range(num_ep_groups):
                 ep_cnt = i * moe_ep_size
-                size = (
-                    dist.get_world_size()
-                    if moe_ep_size > dist.get_world_size()
-                    else moe_ep_size
-                )
+                size = (dist.get_world_size()
+                        if moe_ep_size > dist.get_world_size() else moe_ep_size)
                 ranks = list(range(ep_cnt, ep_cnt + size))
                 _ep_group = dist.new_group(ranks)
                 if dist.get_rank() in ranks:
@@ -285,9 +281,7 @@ class InferenceEngine(Module):
 
     def _validate_args(self, mpu):
         if not isinstance(self.module, Module):
-            raise ValueError(
-                f"model must be a torch.nn.Module, got {type(self.module)}"
-            )
+            raise ValueError(f"model must be a torch.nn.Module, got {type(self.module)}")
         if not isinstance(self.mp_world_size, int) or self.mp_world_size < 1:
             raise ValueError(f"mp_size must be an int >= 1, got {self.mp_world_size}")
 
@@ -298,58 +292,50 @@ class InferenceEngine(Module):
                     raise ValueError(f"mpu is missing {method}")
         if self.checkpoint is not None and not isinstance(self.checkpoint, (str, dict)):
             raise ValueError(
-                f"checkpoint must be None, str or dict, got {type(self.checkpoint)}"
-            )
+                f"checkpoint must be None, str or dict, got {type(self.checkpoint)}")
 
         supported_dtypes = [None, torch.half, torch.int8, torch.float]
         if self.dtype not in supported_dtypes:
             raise ValueError(
-                f"{self.dtype} not supported, valid dtype: {supported_dtypes}"
-            )
+                f"{self.dtype} not supported, valid dtype: {supported_dtypes}")
 
-        if self.injection_dict is not None and not isinstance(
-            self.injection_dict, dict
-        ):
+        if self.injection_dict is not None and not isinstance(self.injection_dict, dict):
             raise ValueError(
-                f"injection_dict must be None or a dict, got: {self.injection_dict}"
-            )
+                f"injection_dict must be None or a dict, got: {self.injection_dict}")
 
     def load_model_with_checkpoint(self, r_module):
         self.mp_replace = ReplaceWithTensorSlicing(
-            mp_group=self.mp_group, mp_size=self.mp_world_size
-        )  # , out_dim=0, in_dim=1)
+            mp_group=self.mp_group,
+            mp_size=self.mp_world_size)  # , out_dim=0, in_dim=1)
         error_msgs = []
 
         def load(module, state_dict, prefix):
             args = (state_dict, prefix, {}, True, [], [], error_msgs)
-            if (
-                len(list(module.parameters())) > 0
-                and list(module.parameters())[0].numel() == 0
-            ):
-                with GatheredParameters(
-                    list(module.parameters(recurse=False)), modifier_rank=0
-                ):
+            if (len(list(module.parameters())) > 0
+                    and list(module.parameters())[0].numel() == 0):
+                with GatheredParameters(list(module.parameters(recurse=False)),
+                                        modifier_rank=0):
                     if dist.get_rank() == 0:
                         module._load_from_state_dict(*args)
             else:
                 if hasattr(module, "weight"):
                     if "query_key_value" in prefix:
                         module.weight = self.mp_replace.qkv_copy(
-                            module.weight.data, state_dict[prefix + "weight"]
-                        )
+                            module.weight.data,
+                            state_dict[prefix + "weight"])
                     else:
                         module.weight = self.mp_replace.copy(
-                            module.weight.data, state_dict[prefix + "weight"]
-                        )
+                            module.weight.data,
+                            state_dict[prefix + "weight"])
                 else:
                     module.norm.weight = self.mp_replace.copy(
-                        module.norm.weight.data, state_dict[prefix + "weight"]
-                    )
+                        module.norm.weight.data,
+                        state_dict[prefix + "weight"])
                 if prefix + "bias" in self.key_list:
                     if hasattr(module, "norm"):
                         module.norm.bias = self.mp_replace.copy(
-                            module.norm.bias, state_dict[prefix + "bias"]
-                        )
+                            module.norm.bias,
+                            state_dict[prefix + "bias"])
                     else:
                         data = state_dict[prefix + "bias"]
                         data = data.to(torch.cuda.current_device())
@@ -369,10 +355,8 @@ class InferenceEngine(Module):
                     checking_key = prefix + name + "."
                     if not any(checking_key in item for item in self.key_list):
                         continue
-                    if (
-                        len(list(child.parameters())) > 0
-                        and list(child.parameters())[0].numel() == 0
-                    ):
+                    if (len(list(child.parameters())) > 0
+                            and list(child.parameters())[0].numel() == 0):
                         if len(child.weight.ds_shape) == 1:
                             child = Normalize(
                                 dim=child.weight.ds_shape[-1],
@@ -382,9 +366,9 @@ class InferenceEngine(Module):
                             setattr(module, name, child)
                     load(child, self.sd, prefix + name + ".")
                 else:
-                    load_module_recursive(
-                        child, prefix if level == 0 else prefix + name + ".", level + 1
-                    )
+                    load_module_recursive(child,
+                                          prefix if level == 0 else prefix + name + ".",
+                                          level + 1)
 
         load_module_recursive(r_module)
 
@@ -403,11 +387,9 @@ class InferenceEngine(Module):
         base_dir="",
         enable_qkv_quantization=False,
     ):
-        checkpoint = (
-            SDLoaderFactory.get_sd_loader_json(checkpoint_dir, self.checkpoint_engine)
-            if checkpoint_dir is not None
-            else None
-        )
+        checkpoint = (SDLoaderFactory.get_sd_loader_json(checkpoint_dir,
+                                                         self.checkpoint_engine)
+                      if checkpoint_dir is not None else None)
         replace_transformer_layer(
             client_module,
             self.module,
@@ -442,9 +424,9 @@ class InferenceEngine(Module):
         )
 
     def _get_all_ckpt_names(self, checkpoints_path, tag):
-        ckpt_file_pattern = self._get_ckpt_name(
-            checkpoints_path, tag, mp_placeholder="*"
-        )
+        ckpt_file_pattern = self._get_ckpt_name(checkpoints_path,
+                                                tag,
+                                                mp_placeholder="*")
         import glob
 
         ckpt_files = glob.glob(ckpt_file_pattern)
@@ -468,8 +450,7 @@ class InferenceEngine(Module):
         is_pipe_parallel = isinstance(self.module, PipelineModule)
         if is_pipe_parallel:
             raise RuntimeError(
-                "pipeline parallelism is currently not supported in inference."
-            )
+                "pipeline parallelism is currently not supported in inference.")
         if os.path.isdir(load_dir):
             if tag is None:
                 latest_path = os.path.join(load_dir, "latest")
@@ -596,8 +577,7 @@ class InferenceEngine(Module):
                 "Model times are empty and cuda graph is enabled. If "
                 "this is a GPT-style model this combo is not supported. If this is a "
                 "BERT-style model this is a bug, please report it. "
-                f"Model type is: {type(self.module)}"
-            )
+                f"Model type is: {type(self.module)}")
         self._model_times = []
         return model_times
 

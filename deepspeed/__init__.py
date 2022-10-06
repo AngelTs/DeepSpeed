@@ -55,10 +55,12 @@ __git_branch__ = git_branch
 def initialize(
     args=None,
     model: torch.nn.Module = None,
-    optimizer: Optional[Union[Optimizer, DeepSpeedOptimizerCallable]] = None,
+    optimizer: Optional[Union[Optimizer,
+                              DeepSpeedOptimizerCallable]] = None,
     model_parameters: Optional[torch.nn.Module] = None,
     training_data: Optional[torch.utils.data.Dataset] = None,
-    lr_scheduler: Optional[Union[_LRScheduler, DeepSpeedSchedulerCallable]] = None,
+    lr_scheduler: Optional[Union[_LRScheduler,
+                                 DeepSpeedSchedulerCallable]] = None,
     mpu=None,
     dist_init_required: Optional[bool] = None,
     collate_fn=None,
@@ -115,8 +117,9 @@ def initialize(
     """
     log_dist(
         "DeepSpeed info: version={}, git-hash={}, git-branch={}".format(
-            __version__, __git_hash__, __git_branch__
-        ),
+            __version__,
+            __git_hash__,
+            __git_branch__),
         ranks=[0],
     )
 
@@ -183,7 +186,8 @@ def _add_core_arguments(parser):
         "--deepspeed",
         default=False,
         action="store_true",
-        help="Enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)",
+        help=
+        "Enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)",
     )
 
     group.add_argument(
@@ -197,7 +201,8 @@ def _add_core_arguments(parser):
         "--deepscale",
         default=False,
         action="store_true",
-        help="Deprecated enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)",
+        help=
+        "Deprecated enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)",
     )
 
     group.add_argument(
@@ -211,7 +216,8 @@ def _add_core_arguments(parser):
         "--deepspeed_mpi",
         default=False,
         action="store_true",
-        help="Run via MPI, this will attempt to discover the necessary variables to initialize torch "
+        help=
+        "Run via MPI, this will attempt to discover the necessary variables to initialize torch "
         "distributed from the MPI environment",
     )
 
@@ -315,8 +321,9 @@ def init_inference(
     """
     log_dist(
         "DeepSpeed info: version={}, git-hash={}, git-branch={}".format(
-            __version__, __git_hash__, __git_branch__
-        ),
+            __version__,
+            __git_hash__,
+            __git_branch__),
         ranks=[0],
     )
 

@@ -51,7 +51,6 @@ class DeepSpeedInferenceConfig(TransformerConfig):
         return_tuple: if True, returns the transformer output as a tuple, otherwise returns as a tensor
         bigscience_bloom: This flag is added temporarily for supporting the BLOOM-176B model architecture.
     """
-
     def __init__(
         self,
         hidden_size=-1,
@@ -80,12 +79,13 @@ class DeepSpeedInferenceConfig(TransformerConfig):
         bigscience_bloom=False,
         enable_qkv_quantization=False,
     ):
-        super(DeepSpeedInferenceConfig, self).__init__(
-            hidden_size,
-            (intermediate_size if intermediate_size > 0 else 4 * hidden_size),
-            heads,
-            num_hidden_layers,
-        )
+        super(DeepSpeedInferenceConfig,
+              self).__init__(
+                  hidden_size,
+                  (intermediate_size if intermediate_size > 0 else 4 * hidden_size),
+                  heads,
+                  num_hidden_layers,
+              )
         self.fp16 = fp16
         self.pre_layer_norm = pre_layer_norm
         self.local_rank = local_rank
@@ -174,24 +174,20 @@ class DeepSpeedSelfAttentionFunction(Function):
 
         def _transpose_for_context(x):
             x = x.permute(0, 2, 1, 3).contiguous()
-            new_x_layer_shape = x.size()[:-2] + (hidden_size_per_partition,)
+            new_x_layer_shape = x.size()[:-2] + (hidden_size_per_partition, )
             return x.view(*new_x_layer_shape).contiguous()
 
         def compute_attention(qkv_out, input_mask):
             no_masking = input_mask is None
             if no_masking:
                 input_mask = torch.empty(1)
-            alibi_offset = (
-                dist.get_rank() * num_attention_heads_per_partition
-                if dist.is_initialized()
-                else 0
-            )
+            alibi_offset = (dist.get_rank() * num_attention_heads_per_partition
+                            if dist.is_initialized() else 0)
 
             attn_key_value = score_context_func(
                 qkv_out,
-                ((1 - input_mask).to(qkv_out.dtype) * minus_inf)
-                if input_mask.dtype == torch.int64
-                else input_mask,
+                ((1 - input_mask).to(qkv_out.dtype) *
+                 minus_inf) if input_mask.dtype == torch.int64 else input_mask,
                 config.rotary_dim,
                 config.rotate_half,
                 config.rotate_every_two,
@@ -256,21 +252,16 @@ class DeepSpeedSelfAttentionFunction(Function):
             return output, key_layer, value_layer, context_layer, qkv_out[-1]
 
         output, key_layer, value_layer, context_layer, inp_norm = selfAttention_fp()
-        if (
-            config.mlp_after_attn
-            and mp_group is not None
-            and dist.get_world_size(group=mp_group) > 1
-        ):
+        if (config.mlp_after_attn and mp_group is not None
+                and dist.get_world_size(group=mp_group) > 1):
             dist.all_reduce(output, group=mp_group)
 
         return (output, key_layer, value_layer, context_layer, inp_norm)
 
     @staticmethod
     def backward(ctx, grad_output, grad_output1, grad_output2, grad_output3):
-        raise RuntimeError(
-            "You are running with DeepSpeed Inference mode. \
-                            Please switch to Training mode for running backward!"
-        )
+        raise RuntimeError("You are running with DeepSpeed Inference mode. \
+                            Please switch to Training mode for running backward!")
 
 
 class DeepSpeedSelfAttention(nn.Module):
@@ -287,9 +278,8 @@ class DeepSpeedSelfAttention(nn.Module):
     ):
         super(DeepSpeedSelfAttention, self).__init__()
         self.config = config
-        data_type = (
-            torch.int8 if config.q_int else torch.half if config.fp16 else torch.float
-        )
+        data_type = (torch.int8
+                     if config.q_int else torch.half if config.fp16 else torch.float)
         data_type_fp = torch.half if config.fp16 else torch.float
         self.config.layer_id = DeepSpeedSelfAttention.num_layers
         DeepSpeedSelfAttention.num_layers = DeepSpeedSelfAttention.num_layers + 1
@@ -298,9 +288,8 @@ class DeepSpeedSelfAttention(nn.Module):
         # half_size = False
         self.attn_qkvw = nn.Parameter(
             torch.empty(
-                self.config.hidden_size // 2
-                if half_size and config.enable_qkv_quantization
-                else self.config.hidden_size,
+                self.config.hidden_size // 2 if half_size
+                and config.enable_qkv_quantization else self.config.hidden_size,
                 (self.config.hidden_size // self.config.mp_size) * 3,
                 dtype=data_type,
                 device=device,
@@ -318,9 +307,8 @@ class DeepSpeedSelfAttention(nn.Module):
 
         self.attn_ow = nn.Parameter(
             torch.empty(
-                (self.config.hidden_size // self.config.mp_size // 2)
-                if half_size
-                else (self.config.hidden_size // self.config.mp_size),
+                (self.config.hidden_size // self.config.mp_size // 2) if half_size else
+                (self.config.hidden_size // self.config.mp_size),
                 self.config.hidden_size,
                 dtype=data_type,
                 device=device,
@@ -328,17 +316,17 @@ class DeepSpeedSelfAttention(nn.Module):
             requires_grad=False,
         )
         self.attn_ob = nn.Parameter(
-            torch.empty(self.config.hidden_size, dtype=data_type, device=device),
+            torch.empty(self.config.hidden_size,
+                        dtype=data_type,
+                        device=device),
             requires_grad=False,
         )
 
-        self.num_attention_heads_per_partition = (
-            self.config.heads // self.config.mp_size
-        )
+        self.num_attention_heads_per_partition = (self.config.heads //
+                                                  self.config.mp_size)
         self.hidden_size_per_partition = self.config.hidden_size // self.config.mp_size
-        self.hidden_size_per_attention_head = (
-            self.config.hidden_size // self.config.heads
-        )
+        self.hidden_size_per_attention_head = (self.config.hidden_size //
+                                               self.config.heads)
 
         global inference_cuda_module
         if inference_cuda_module is None:
@@ -353,56 +341,33 @@ class DeepSpeedSelfAttention(nn.Module):
         self.merge_count = int(math.log2(merge_count))
 
         self.norm_factor = math.sqrt(
-            math.sqrt(self.config.hidden_size // self.config.heads)
-        )
+            math.sqrt(self.config.hidden_size // self.config.heads))
         self.qkv_merging = qkv_merging
-        self.score_context_func = (
-            inference_cuda_module.softmax_context_fp16
-            if (config.fp16 or config.q_int)
-            else inference_cuda_module.softmax_context_fp32
-        )
-        self.qkv_func = (
-            inference_cuda_module.qkv_gemm_fp16
-            if config.fp16 or config.q_int
-            else inference_cuda_module.qkv_gemm_fp32
-        )
-        self.vector_matmul_func = (
-            inference_cuda_module.vector_matmul_fp16
-            if config.fp16 or config.q_int
-            else inference_cuda_module.vector_matmul_fp32
-        )
-        self.linear_func = (
-            inference_cuda_module.linear_layer_fp16
-            if config.fp16
-            else inference_cuda_module.linear_layer_fp32
-        )
+        self.score_context_func = (inference_cuda_module.softmax_context_fp16 if
+                                   (config.fp16 or config.q_int) else
+                                   inference_cuda_module.softmax_context_fp32)
+        self.qkv_func = (inference_cuda_module.qkv_gemm_fp16 if config.fp16
+                         or config.q_int else inference_cuda_module.qkv_gemm_fp32)
+        self.vector_matmul_func = (inference_cuda_module.vector_matmul_fp16
+                                   if config.fp16 or config.q_int else
+                                   inference_cuda_module.vector_matmul_fp32)
+        self.linear_func = (inference_cuda_module.linear_layer_fp16
+                            if config.fp16 else inference_cuda_module.linear_layer_fp32)
 
-        self.score_context_func = (
-            inference_cuda_module.softmax_context_fp16
-            if (config.fp16 or config.q_int)
-            else inference_cuda_module.softmax_context_fp32
-        )
-        self.qkv_func = (
-            inference_cuda_module.qkv_gemm_fp16
-            if config.fp16 or config.q_int
-            else inference_cuda_module.qkv_gemm_fp32
-        )
-        self.vector_matmul_func = (
-            inference_cuda_module.vector_matmul_fp16
-            if config.fp16 or config.q_int
-            else inference_cuda_module.vector_matmul_fp32
-        )
-        self.linear_func = (
-            inference_cuda_module.linear_layer_fp16
-            if config.fp16
-            else inference_cuda_module.linear_layer_fp32
-        )
+        self.score_context_func = (inference_cuda_module.softmax_context_fp16 if
+                                   (config.fp16 or config.q_int) else
+                                   inference_cuda_module.softmax_context_fp32)
+        self.qkv_func = (inference_cuda_module.qkv_gemm_fp16 if config.fp16
+                         or config.q_int else inference_cuda_module.qkv_gemm_fp32)
+        self.vector_matmul_func = (inference_cuda_module.vector_matmul_fp16
+                                   if config.fp16 or config.q_int else
+                                   inference_cuda_module.vector_matmul_fp32)
+        self.linear_func = (inference_cuda_module.linear_layer_fp16
+                            if config.fp16 else inference_cuda_module.linear_layer_fp32)
 
-        self.score_context_func = (
-            inference_cuda_module.softmax_context_fp32
-            if (not config.fp16)
-            else inference_cuda_module.softmax_context_fp16
-        )
+        self.score_context_func = (inference_cuda_module.softmax_context_fp32 if
+                                   (not config.fp16) else
+                                   inference_cuda_module.softmax_context_fp16)
 
     def forward(
         self,
@@ -531,10 +496,8 @@ class DeepSpeedMLPFunction(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        raise RuntimeError(
-            "You are running with DeepSpeed Inference mode. \
-                            Please switch to Training mode for running backward!"
-        )
+        raise RuntimeError("You are running with DeepSpeed Inference mode. \
+                            Please switch to Training mode for running backward!")
 
 
 class DeepSpeedMLP(nn.Module):
@@ -550,20 +513,23 @@ class DeepSpeedMLP(nn.Module):
         super(DeepSpeedMLP, self).__init__()
 
         self.config = config
-        data_type = (
-            torch.int8 if config.q_int else torch.half if config.fp16 else torch.float
-        )
+        data_type = (torch.int8
+                     if config.q_int else torch.half if config.fp16 else torch.float)
         data_type_fp = torch.half if config.fp16 else torch.float
         device = torch.cuda.current_device() if config.bigscience_bloom else "cpu"
 
         half_size = config.q_int and config.q_bits == 4
         # half_size = False
         self.attn_nw = nn.Parameter(
-            torch.empty(self.config.hidden_size, dtype=data_type, device=device),
+            torch.empty(self.config.hidden_size,
+                        dtype=data_type,
+                        device=device),
             requires_grad=False,
         )
         self.attn_nb = nn.Parameter(
-            torch.empty(self.config.hidden_size, dtype=data_type, device=device),
+            torch.empty(self.config.hidden_size,
+                        dtype=data_type,
+                        device=device),
             requires_grad=False,
         )
         self.inter_w = nn.Parameter(
@@ -585,9 +551,9 @@ class DeepSpeedMLP(nn.Module):
         )
         self.output_w = nn.Parameter(
             torch.empty(
-                (self.config.intermediate_size // self.config.mp_size // 2)
-                if half_size
-                else (self.config.intermediate_size // self.config.mp_size),
+                (self.config.intermediate_size // self.config.mp_size //
+                 2) if half_size else
+                (self.config.intermediate_size // self.config.mp_size),
                 self.config.hidden_size,
                 dtype=data_type,
                 device=device,
@@ -595,7 +561,9 @@ class DeepSpeedMLP(nn.Module):
             requires_grad=False,
         )
         self.output_b = nn.Parameter(
-            torch.empty(self.config.hidden_size, dtype=data_type, device=device),
+            torch.empty(self.config.hidden_size,
+                        dtype=data_type,
+                        device=device),
             requires_grad=False,
         )
 
@@ -610,33 +578,22 @@ class DeepSpeedMLP(nn.Module):
             builder = op_builder.InferenceBuilder()
             inference_cuda_module = builder.load()
 
-        self.mlp_gemm_func = (
-            inference_cuda_module.mlp_gemm_fp16
-            if config.fp16 or config.q_int
-            else inference_cuda_module.mlp_gemm_fp32
-        )
-        self.vector_matmul_func = (
-            inference_cuda_module.vector_matmul_fp16
-            if config.fp16 or config.q_int
-            else inference_cuda_module.vector_matmul_fp32
-        )
-        self.fused_gemm_gelu = (
-            inference_cuda_module.fused_gemm_gelu_fp16
-            if config.fp16 or config.q_int
-            else inference_cuda_module.fused_gemm_gelu_fp32
-        )
+        self.mlp_gemm_func = (inference_cuda_module.mlp_gemm_fp16 if config.fp16
+                              or config.q_int else inference_cuda_module.mlp_gemm_fp32)
+        self.vector_matmul_func = (inference_cuda_module.vector_matmul_fp16
+                                   if config.fp16 or config.q_int else
+                                   inference_cuda_module.vector_matmul_fp32)
+        self.fused_gemm_gelu = (inference_cuda_module.fused_gemm_gelu_fp16
+                                if config.fp16 or config.q_int else
+                                inference_cuda_module.fused_gemm_gelu_fp32)
 
-        self.bias_residual_func = (
-            inference_cuda_module.bias_residual_fp16
-            if config.fp16 or config.q_int
-            else inference_cuda_module.bias_residual_fp32
-        )
+        self.bias_residual_func = (inference_cuda_module.bias_residual_fp16
+                                   if config.fp16 or config.q_int else
+                                   inference_cuda_module.bias_residual_fp32)
 
-        self.residual_add_func = (
-            inference_cuda_module.residual_add_bias_fp16
-            if config.fp16 or config.q_int
-            else inference_cuda_module.residual_add_bias_fp32
-        )
+        self.residual_add_func = (inference_cuda_module.residual_add_bias_fp16
+                                  if config.fp16 or config.q_int else
+                                  inference_cuda_module.residual_add_bias_fp32)
 
     def forward(self, input, residual, residual_norm, bias):
         return DeepSpeedMLPFunction.apply(
@@ -726,11 +683,15 @@ class DeepSpeedTransformerInference(nn.Module):
 
         device = torch.cuda.current_device() if config.bigscience_bloom else "cpu"
         self.norm_w = nn.Parameter(
-            torch.empty(self.config.hidden_size, dtype=data_type, device=device),
+            torch.empty(self.config.hidden_size,
+                        dtype=data_type,
+                        device=device),
             requires_grad=False,
         )
         self.norm_b = nn.Parameter(
-            torch.empty(self.config.hidden_size, dtype=data_type, device=device),
+            torch.empty(self.config.hidden_size,
+                        dtype=data_type,
+                        device=device),
             requires_grad=False,
         )
         self.layer_past = None
@@ -800,14 +761,13 @@ class DeepSpeedTransformerInference(nn.Module):
             output = self.mlp(attention_output, input, inp_norm, self.attention.attn_ob)
 
             if not self.config.pre_layer_norm:
-                ds_layernorm = (
-                    inference_cuda_module.layer_norm_fp16
-                    if self.config.fp16 or self.config.q_int
-                    else inference_cuda_module.layer_norm_fp32
-                )
-                output = ds_layernorm(
-                    output, self.norm_w, self.norm_b, self.config.epsilon
-                )
+                ds_layernorm = (inference_cuda_module.layer_norm_fp16
+                                if self.config.fp16 or self.config.q_int else
+                                inference_cuda_module.layer_norm_fp32)
+                output = ds_layernorm(output,
+                                      self.norm_w,
+                                      self.norm_b,
+                                      self.config.epsilon)
 
             output = output.to(input_type)
         if get_present:

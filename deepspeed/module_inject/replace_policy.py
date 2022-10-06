@@ -152,8 +152,7 @@ class HFGPTNEOLayerPolicy(DSPolicy):
             import transformers
 
             HFGPTNEOLayerPolicy._orig_layer_class = (
-                transformers.models.gpt_neo.modeling_gpt_neo.GPTNeoBlock
-            )
+                transformers.models.gpt_neo.modeling_gpt_neo.GPTNeoBlock)
         except:
             HFGPTNEOLayerPolicy._orig_layer_class = None
 
@@ -208,8 +207,7 @@ class HFGPTJLayerPolicy(DSPolicy):
             import transformers
 
             HFGPTJLayerPolicy._orig_layer_class = (
-                transformers.models.gptj.modeling_gptj.GPTJBlock
-            )
+                transformers.models.gptj.modeling_gptj.GPTJBlock)
         except:
             HFGPTJLayerPolicy._orig_layer_class = None
 
@@ -301,9 +299,8 @@ class MegatronLayerPolicy(DSPolicy):
         if moe:
             moe_experts = (
                 self.client_module.mlp.deepspeed_moe.experts.deepspeed_experts
-                if moe_type == "standard"
-                else self.client_module.mlp.moe.deepspeed_moe.experts.deepspeed_experts
-            )
+                if moe_type == "standard" else
+                self.client_module.mlp.moe.deepspeed_moe.experts.deepspeed_experts)
             num_experts = len(moe_experts)
             if moe_type == "standard":
                 return (
@@ -357,8 +354,7 @@ class HFGPT2LayerPolicy(DSPolicy):
             import transformers
 
             HFGPT2LayerPolicy._orig_layer_class = (
-                transformers.models.gpt2.modeling_gpt2.GPT2Block
-            )
+                transformers.models.gpt2.modeling_gpt2.GPT2Block)
         except:
             HFGPT2LayerPolicy._orig_layer_class = None
 
@@ -404,12 +400,10 @@ class BLOOMLayerPolicy(DSPolicy):
             import transformers
 
             BLOOMLayerPolicy._orig_layer_class = (
-                transformers.models.bloom.modeling_bloom.BloomBlock
-            )
+                transformers.models.bloom.modeling_bloom.BloomBlock)
             global supported_models
             supported_models.update(
-                {transformers.models.bloom.modeling_bloom.BloomModel}
-            )
+                {transformers.models.bloom.modeling_bloom.BloomModel})
         except:
             BLOOMLayerPolicy._orig_layer_class = None
 
@@ -558,11 +552,10 @@ class HFOPTLayerPolicy(DSPolicy):
             import transformers
 
             HFOPTLayerPolicy._orig_layer_class = (
-                transformers.models.opt.modeling_opt.OPTDecoderLayer
-            )
+                transformers.models.opt.modeling_opt.OPTDecoderLayer)
             if isinstance(
-                DSPolicy.hf_model_config,
-                transformers.models.opt.configuration_opt.OPTConfig,
+                    DSPolicy.hf_model_config,
+                    transformers.models.opt.configuration_opt.OPTConfig,
             ):
                 self.pre_attn_norm = self.hf_model_config.do_layer_norm_before
         except:

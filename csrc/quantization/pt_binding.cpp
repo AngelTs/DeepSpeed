@@ -1,8 +1,8 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
 #include <vector>
-#include "custom_cuda_layers.h"
 #include "curand.h"
+#include "custom_cuda_layers.h"
 
 template <typename T>
 at::Tensor ds_quantize(at::Tensor& vals, int groups, int bits)
