@@ -30,15 +30,17 @@ def packInt4(input, output=None):
         return int(-1 * n // 1 * -1)
 
     shape[dim] = int(ceil(shape[dim] / packed_size))
-    output = (output.zero_() if output is not None else torch.zeros(shape,
-                                                                    device=input.device,
-                                                                    dtype=torch.int8))
+    output = (
+        output.zero_()
+        if output is not None
+        else torch.zeros(shape, device=input.device, dtype=torch.int8)
+    )
     assert tuple(output.shape) == tuple(shape)
 
-    sliced_input = input[(slice(None), ) + (slice(0, None, packed_size), )]
+    sliced_input = input[(slice(None),) + (slice(0, None, packed_size),)]
     compress0 = torch.bitwise_left_shift(sliced_input, 4)
 
-    sliced_input = input[(slice(None), ) + (slice(1, None, packed_size), )]
+    sliced_input = input[(slice(None),) + (slice(1, None, packed_size),)]
     compress1 = torch.bitwise_and(sliced_input, 15)
 
     output = output.narrow(dim, 0, sliced_input.shape[dim])
@@ -77,30 +79,26 @@ class GroupQuantizer:
         out = torch.nn.Parameter(inputs_q, requires_grad=False)
         inputs_split = inputs.split(inputs.shape[parallel_dim] // 2, dim=parallel_dim)
         input_flat = [
-            inputs_split[i].reshape(self.num_groups,
-                                    -1).contiguous() for i in range(2)
+            inputs_split[i].reshape(self.num_groups, -1).contiguous() for i in range(2)
         ]
         input_min = [
-            torch.min(input_flat[i],
-                      dim=1,
-                      keepdim=True)[0].float() for i in range(2)
+            torch.min(input_flat[i], dim=1, keepdim=True)[0].float() for i in range(2)
         ]
         input_max = [
-            torch.max(input_flat[i],
-                      dim=1,
-                      keepdim=True)[0].float() for i in range(2)
+            torch.max(input_flat[i], dim=1, keepdim=True)[0].float() for i in range(2)
         ]
         scale1 = [
-            (torch.max(input_min[i].abs(),
-                       input_max[i].abs()) * 2.0 / (q_range)).squeeze().unsqueeze(0)
+            (torch.max(input_min[i].abs(), input_max[i].abs()) * 2.0 / (q_range))
+            .squeeze()
+            .unsqueeze(0)
             for i in range(2)
         ]
 
-        out.scale = (torch.cat([scale.squeeze().unsqueeze(0),
-                                scale1[0],
-                                scale1[1]],
-                               dim=0).reshape(self.num_groups,
-                                              -1).contiguous())
+        out.scale = (
+            torch.cat([scale.squeeze().unsqueeze(0), scale1[0], scale1[1]], dim=0)
+            .reshape(self.num_groups, -1)
+            .contiguous()
+        )
 
         return out
 
@@ -130,9 +128,9 @@ class ReplaceWithTensorSlicing:
         inner_dim = 1 if q_int else 0
         outer_dim = 0 if q_int else 1
         if self.out_dim == 0:
-            src_split = torch.split(src.data,
-                                    src_shape[outer_dim] // self.mp_size,
-                                    dim=0)
+            src_split = torch.split(
+                src.data, src_shape[self.out_dim] // self.mp_size, dim=0
+            )
         else:
             src_split = torch.split(src.data, src.shape[-1] // 3, dim=-1)
         if len(src_shape) == 2 and len(dst_shape) == 2:
@@ -142,20 +140,24 @@ class ReplaceWithTensorSlicing:
                 self.merge_assert(src_shape[outer_dim], dst_shape[self.out_dim])
                 qkv_size = dst_shape[self.out_dim] // 3
                 qkv_split = [
-                    torch.split(src_s,
-                                qkv_size,
-                                dim=outer_dim) for src_s in src_split
+                    torch.split(src_s, qkv_size, dim=outer_dim) for src_s in src_split
                 ]
 
                 weight_split = [
-                    torch.cat([qkv_s[i] for qkv_s in qkv_split],
-                              axis=outer_dim) for i in range(len(qkv_split[0]))
+                    torch.cat([qkv_s[i] for qkv_s in qkv_split], axis=outer_dim)
+                    for i in range(len(qkv_split[0]))
                 ]
-                dst = (weight_split[self.gpu_index].to(
-                    torch.cuda.current_device()).contiguous())
+                dst.data.copy_(
+                    weight_split[self.gpu_index]
+                    .to(torch.cuda.current_device())
+                    .contiguous()
+                )
             else:
-                dst = (src_split[self.gpu_index].to(
-                    torch.cuda.current_device()).contiguous())
+                dst.data.copy_(
+                    src_split[self.gpu_index]
+                    .to(torch.cuda.current_device())
+                    .contiguous()
+                )
         else:
             if src_shape[0] == dst_shape[0]:
                 dst = src
@@ -163,14 +165,21 @@ class ReplaceWithTensorSlicing:
                 qkv_size = dst_shape[0] // 3
                 qkv_split = [torch.split(src_s, qkv_size, dim=0) for src_s in src_split]
                 bias_split = [
-                    torch.cat([qkv_s[i] for qkv_s in qkv_split],
-                              axis=0) for i in range(len(qkv_split[0]))
+                    torch.cat([qkv_s[i] for qkv_s in qkv_split], axis=0)
+                    for i in range(len(qkv_split[0]))
                 ]
-                dst = (bias_split[self.gpu_index].to(
-                    torch.cuda.current_device()).contiguous())
+                dst.data.copy_(
+                    bias_split[self.gpu_index]
+                    .to(torch.cuda.current_device())
+                    .contiguous()
+                )
             else:
-                dst.data.copy_(src_split[self.gpu_index].to(
-                    torch.cuda.current_device()).contiguous())
+                dst.data.copy_(
+                    src_split[self.gpu_index]
+                    .to(torch.cuda.current_device())
+                    .contiguous()
+                )
+
         dst = torch.nn.parameter.Parameter(dst, requires_grad=False)
         if hasattr(src, "scale"):
             dst.scale = src.scale
@@ -184,32 +193,40 @@ class ReplaceWithTensorSlicing:
         src_shape = src.shape
         dst_shape = dst.shape
         if len(src_shape) == 2 and len(dst_shape) == 2:
-            if (src_shape[inner_dim] == dst_shape[self.in_dim]
-                    and src_shape[outer_dim] == dst_shape[self.out_dim]):
+            if (
+                src_shape[inner_dim] == dst_shape[self.in_dim]
+                and src_shape[outer_dim] == dst_shape[self.out_dim]
+            ):
                 dst = src
             else:
                 if src_shape[inner_dim] != dst_shape[self.in_dim]:
                     self.merge_assert(src_shape[inner_dim], dst_shape[self.in_dim])
-                    weight_split = (torch.split(
-                        src,
-                        dst_shape[self.in_dim],
-                        dim=inner_dim)[self.gpu_index].to(
-                            torch.cuda.current_device()).contiguous())
+                    weight_split = (
+                        torch.split(src, dst_shape[self.in_dim], dim=inner_dim)[
+                            self.gpu_index
+                        ]
+                        .to(torch.cuda.current_device())
+                        .contiguous()
+                    )
                 else:
                     self.merge_assert(src_shape[outer_dim], dst_shape[self.out_dim])
-                    weight_split = (torch.split(
-                        src.data,
-                        dst_shape[self.out_dim],
-                        dim=outer_dim)[self.gpu_index].to(
-                            torch.cuda.current_device()).contiguous())
+                    weight_split = (
+                        torch.split(src.data, dst_shape[self.out_dim], dim=outer_dim)[
+                            self.gpu_index
+                        ]
+                        .to(torch.cuda.current_device())
+                        .contiguous()
+                    )
                 dst.data.copy_(weight_split.contiguous())
         else:
             if src_shape[0] == dst_shape[0]:
                 dst.data.copy_(src)
             else:
-                bias_split = (torch.split(src.data,
-                                          dst_shape[-1])[self.gpu_index].to(
-                                              torch.cuda.current_device()).contiguous())
+                bias_split = (
+                    torch.split(src.data, dst_shape[-1])[self.gpu_index]
+                    .to(torch.cuda.current_device())
+                    .contiguous()
+                )
                 dst.data.copy_(bias_split)
         dst = torch.nn.parameter.Parameter(dst, requires_grad=False)
         if hasattr(src, "scale"):
@@ -257,30 +274,26 @@ class GroupQuantizer2:
         # print(inputs.shape)
         inputs_split = inputs.split(inputs.shape[parallel_dim] // 2, dim=parallel_dim)
         input_flat = [
-            inputs_split[i].reshape(self.num_groups,
-                                    -1).contiguous() for i in range(2)
+            inputs_split[i].reshape(self.num_groups, -1).contiguous() for i in range(2)
         ]
         input_min = [
-            torch.min(input_flat[i],
-                      dim=1,
-                      keepdim=True)[0].float() for i in range(2)
+            torch.min(input_flat[i], dim=1, keepdim=True)[0].float() for i in range(2)
         ]
         input_max = [
-            torch.max(input_flat[i],
-                      dim=1,
-                      keepdim=True)[0].float() for i in range(2)
+            torch.max(input_flat[i], dim=1, keepdim=True)[0].float() for i in range(2)
         ]
         scale1 = [
-            (torch.max(input_min[i].abs(),
-                       input_max[i].abs()) * 2.0 / (q_range)).squeeze().unsqueeze(0)
+            (torch.max(input_min[i].abs(), input_max[i].abs()) * 2.0 / (q_range))
+            .squeeze()
+            .unsqueeze(0)
             for i in range(2)
         ]
 
-        out.scale = (torch.cat([scale.squeeze().unsqueeze(0),
-                                scale1[0],
-                                scale1[1]],
-                               dim=0).reshape(self.num_groups,
-                                              -1).contiguous())
+        out.scale = (
+            torch.cat([scale.squeeze().unsqueeze(0), scale1[0], scale1[1]], dim=0)
+            .reshape(self.num_groups, -1)
+            .contiguous()
+        )
         return out
 
 
@@ -355,14 +368,13 @@ def replace_transformer_layer(
     Returns:
         Updated nn.module with replaced transformer layers
     """
-    mp_replace = ReplaceWithTensorSlicing(mp_group=mp_group,
-                                          mp_size=mp_size)  # , out_dim=0, in_dim=1)
+    mp_replace = ReplaceWithTensorSlicing(
+        mp_group=mp_group, mp_size=mp_size
+    )  # , out_dim=0, in_dim=1)
 
-    def replace_with_policy(child,
-                            policy_cls,
-                            triangular_masking,
-                            inference=False,
-                            layer_id=0):
+    def replace_with_policy(
+        child, policy_cls, triangular_masking, inference=False, layer_id=0
+    ):
         policy = policy_cls(child, inference=inference)
         global selected_policy_g
         if selected_policy_g is None:
@@ -434,7 +446,6 @@ def replace_transformer_layer(
             _res_4hh_w = _res_4hh_w.half()
             _res_coef = _res_coef.half()
 
-        mp_replace = ReplaceWithTensorSlicing(mp_group=mp_group)
         assert quantize_settings, "quantize_settings is None"
         (
             quantization_scales,
@@ -442,22 +453,23 @@ def replace_transformer_layer(
             mlp_extra_grouping,
             quantize_groups,
         ) = quantize_settings
-        quantizer = GroupQuantizer(q_int=quantize,
-                                   num_bits=quantize_bits,
-                                   num_groups=quantize_groups)
+        quantizer = GroupQuantizer(
+            q_int=quantize, num_bits=quantize_bits, num_groups=quantize_groups
+        )
 
         if inference:
             if moe:
                 ep_world_size = dist.get_world_size()
-                local_ep_size = (1 if num_experts < ep_world_size else num_experts //
-                                 ep_world_size)
+                local_ep_size = (
+                    1 if num_experts < ep_world_size else num_experts // ep_world_size
+                )
 
                 transformer_config = transformer_inference.DeepSpeedMoEInferenceConfig(
                     hidden_size=hidden_size,
                     heads=num_attention_heads,
-                    layer_norm_eps=config.layer_norm_eps if hasattr(
-                        config,
-                        "layer_norm_eps") else 1e-12,
+                    layer_norm_eps=config.layer_norm_eps
+                    if hasattr(config, "layer_norm_eps")
+                    else 1e-12,
                     fp16=fp16,
                     pre_layer_norm=policy.pre_attn_norm,
                     mp_size=mp_size,
@@ -467,37 +479,45 @@ def replace_transformer_layer(
                     mlp_type=moe_type,
                 )
             else:
-                rotary_dim = (config.rotary_dim if hasattr(config,
-                                                           "rotary_dim") else
-                              child.attention.rotary_ndims if hasattr(
-                                  child,
-                                  "attention") and hasattr(child.attention,
-                                                           "rotary_ndims") else -1)
+                rotary_dim = (
+                    config.rotary_dim
+                    if hasattr(config, "rotary_dim")
+                    else child.attention.rotary_ndims
+                    if hasattr(child, "attention")
+                    and hasattr(child.attention, "rotary_ndims")
+                    else -1
+                )
                 bigscience_bloom = policy_cls is BLOOMLayerPolicy
                 transformer_config = transformer_inference.DeepSpeedInferenceConfig(
                     hidden_size=hidden_size,
                     heads=num_attention_heads,
-                    layer_norm_eps=config.layer_norm_eps if hasattr(
-                        config,
-                        "layer_norm_eps") else
-                    (config.layer_norm_epsilon
-                     if hasattr(config,
-                                "layer_norm_epsilon") else config.layernorm_epsilon
-                     if hasattr(config,
-                                "layernorm_epsilon") else 1.0e-12),
+                    layer_norm_eps=config.layer_norm_eps
+                    if hasattr(config, "layer_norm_eps")
+                    else (
+                        config.layer_norm_epsilon
+                        if hasattr(config, "layer_norm_epsilon")
+                        else config.layernorm_epsilon
+                        if hasattr(config, "layernorm_epsilon")
+                        else 1.0e-12
+                    ),
                     fp16=fp16,
                     pre_layer_norm=policy.pre_attn_norm,
                     mp_size=mp_size,
                     q_int=quantize,
                     q_bits=quantize_bits,
                     return_tuple=(return_tuple or (policy_cls is HFBertLayerPolicy)),
-                    triangular_masking=(policy_cls is not HFBertLayerPolicy
-                                        and policy_cls is not HFDistilBertLayerPolicy),
-                    local_attention=((config.attention_layers[layer_id] == "local")
-                                     if hasattr(config,
-                                                "attention_layers") else False),
-                    window_size=(config.window_size if hasattr(config,
-                                                               "window_size") else 1),
+                    triangular_masking=(
+                        policy_cls is not HFBertLayerPolicy
+                        and policy_cls is not HFDistilBertLayerPolicy
+                    ),
+                    local_attention=(
+                        (config.attention_layers[layer_id] == "local")
+                        if hasattr(config, "attention_layers")
+                        else False
+                    ),
+                    window_size=(
+                        config.window_size if hasattr(config, "window_size") else 1
+                    ),
                     rotary_dim=rotary_dim,
                     mlp_after_attn=(rotary_dim is None or rotary_dim < 0),
                     mlp_act_func_type=policy.mlp_act_func_type,
@@ -516,7 +536,8 @@ def replace_transformer_layer(
                         mp_group=mp_group,
                         ep_group=None if ep_group is None else ep_group[num_experts],
                         expert_mp_group=None
-                        if expert_mp_group is None else expert_mp_group[num_experts],
+                        if expert_mp_group is None
+                        else expert_mp_group[num_experts],
                         quantize_scales=quantization_scales[layer_id],
                         quantize_groups=quantize_groups,
                         merge_count=merge_count,
@@ -525,11 +546,13 @@ def replace_transformer_layer(
                     )
 
                 else:
-                    if (policy_cls is HFBertLayerPolicy
-                            or policy_cls is HFDistilBertLayerPolicy):
+                    if (
+                        policy_cls is HFBertLayerPolicy
+                        or policy_cls is HFDistilBertLayerPolicy
+                    ):
                         new_module = transformer_inference.DeepSpeedEncoder(
-                            transformer_config,
-                            quantize_groups=quantize_groups)
+                            transformer_config, quantize_groups=quantize_groups
+                        )
                     else:
                         new_module = transformer_inference.DeepSpeedTransformerInference(
                             transformer_config,
@@ -558,20 +581,25 @@ def replace_transformer_layer(
                         mp_group=mp_group,
                         ep_group=None if ep_group is None else ep_group[num_experts],
                         expert_mp_group=None
-                        if expert_mp_group is None else expert_mp_group[num_experts],
+                        if expert_mp_group is None
+                        else expert_mp_group[num_experts],
                     )
 
                 else:
-                    if (policy_cls is HFBertLayerPolicy
-                            or policy_cls is HFDistilBertLayerPolicy):
+                    if (
+                        policy_cls is HFBertLayerPolicy
+                        or policy_cls is HFDistilBertLayerPolicy
+                    ):
                         new_module = transformer_inference.DeepSpeedEncoder(
-                            transformer_config)
+                            transformer_config
+                        )
                     else:
                         new_module = (
                             transformer_inference.DeepSpeedTransformerInference(
                                 transformer_config,
                                 mp_group=mp_group,
-                            ))
+                            )
+                        )
             new_module.config.scale_attention = scale_attention
 
             # we want the weights in [input, output] shape
@@ -590,15 +618,15 @@ def replace_transformer_layer(
 
             if attn_linear_layer:
                 if qkvw.numel() == 0 or qkvw.is_meta:
-                    if (qkvw.is_meta
-                            or qkvw.ds_tensor.numel() < attn_block.attn_qkvw.numel()):
+                    if (
+                        qkvw.is_meta
+                        or qkvw.ds_tensor.numel() < attn_block.attn_qkvw.numel()
+                    ):
                         pass
                     else:
-                        with GatheredParameters([qkvw,
-                                                 dense_w,
-                                                 qkvb,
-                                                 dense_b],
-                                                modifier_rank=0):
+                        with GatheredParameters(
+                            [qkvw, dense_w, qkvb, dense_b], modifier_rank=0
+                        ):
                             if not enable_qkv_quantization:
                                 qkvw = transpose(qkvw.data)
                             if not quantize:
@@ -611,8 +639,9 @@ def replace_transformer_layer(
                     if not quantize:
                         dense_w.data = transpose(dense_w.data)
             elif quantize:
-                qkvw.data = (transpose(qkvw.data)
-                             if enable_qkv_quantization else qkvw.data)
+                qkvw.data = (
+                    transpose(qkvw.data) if enable_qkv_quantization else qkvw.data
+                )
                 dense_w.data = transpose(dense_w.data)
 
             def _transpose(x):
@@ -627,20 +656,16 @@ def replace_transformer_layer(
                 if len(q.shape) > 2:
                     return torch.cat(
                         (
-                            q.reshape(q.shape[0],
-                                      -1),
-                            k.reshape(q.shape[0],
-                                      -1),
-                            v.reshape(q.shape[0],
-                                      -1),
+                            q.reshape(q.shape[0], -1),
+                            k.reshape(q.shape[0], -1),
+                            v.reshape(q.shape[0], -1),
                         ),
                         dim=-1,
                     ).reshape(x.shape)
                 else:
-                    return torch.cat((q.reshape(-1),
-                                      k.reshape(-1),
-                                      v.reshape(-1)),
-                                     dim=-1).reshape(x.shape)
+                    return torch.cat(
+                        (q.reshape(-1), k.reshape(-1), v.reshape(-1)), dim=-1
+                    ).reshape(x.shape)
 
             if megatron_v2 or (bigscience_bloom and not qkvw.is_meta):
                 new_module.config.rotate_half = True
@@ -658,15 +683,15 @@ def replace_transformer_layer(
 
             if mlp_linear_layer:
                 if not moe and (_4hh_w.numel() == 0 or _4hh_w.is_meta):
-                    if (_4hh_w.is_meta
-                            or _4hh_w.ds_tensor.numel() < mpl_block.inter_w.numel()):
+                    if (
+                        _4hh_w.is_meta
+                        or _4hh_w.ds_tensor.numel() < mpl_block.inter_w.numel()
+                    ):
                         pass
                     else:
-                        with GatheredParameters([_h4h_w,
-                                                 _4hh_w,
-                                                 _4hh_b,
-                                                 _h4h_b],
-                                                modifier_rank=0):
+                        with GatheredParameters(
+                            [_h4h_w, _4hh_w, _4hh_b, _h4h_b], modifier_rank=0
+                        ):
                             if not quantize:
                                 _h4h_w = transpose(_h4h_w.data)
                                 _4hh_w = transpose(_4hh_w.data)
@@ -674,15 +699,27 @@ def replace_transformer_layer(
                             _4hh_b = _4hh_b.data
                 else:
                     if not quantize:
-                        _h4h_w = ([transpose(moe_w1.data) for moe_w1 in _h4h_w]
-                                  if moe else transpose(_h4h_w.data))
-                        _4hh_w = ([transpose(moe_w1.data) for moe_w1 in _4hh_w]
-                                  if moe else transpose(_4hh_w.data))
+                        _h4h_w = (
+                            [transpose(moe_w1.data) for moe_w1 in _h4h_w]
+                            if moe
+                            else transpose(_h4h_w.data)
+                        )
+                        _4hh_w = (
+                            [transpose(moe_w1.data) for moe_w1 in _4hh_w]
+                            if moe
+                            else transpose(_4hh_w.data)
+                        )
             elif quantize:
-                _h4h_w = ([transpose(moe_w1.data)
-                           for moe_w1 in _h4h_w] if moe else transpose(_h4h_w.data))
-                _4hh_w = ([transpose(moe_w1.data)
-                           for moe_w1 in _4hh_w] if moe else transpose(_4hh_w.data))
+                _h4h_w = (
+                    [transpose(moe_w1.data) for moe_w1 in _h4h_w]
+                    if moe
+                    else transpose(_h4h_w.data)
+                )
+                _4hh_w = (
+                    [transpose(moe_w1.data) for moe_w1 in _4hh_w]
+                    if moe
+                    else transpose(_4hh_w.data)
+                )
             if moe and moe_type == "residual":
                 _res_h4h_w.data = transpose(_res_h4h_w.data)
                 _res_4hh_w.data = transpose(_res_4hh_w.data)
@@ -690,8 +727,10 @@ def replace_transformer_layer(
 
             # TODO: post-rebase, need to add quantizer support for this block below
             if qkvw.is_meta or qkvw.numel() == 0 or qkvw.is_meta:
-                if (qkvw.is_meta
-                        or qkvw.ds_tensor.numel() < attn_block.attn_qkvw.numel()):
+                if (
+                    qkvw.is_meta
+                    or qkvw.ds_tensor.numel() < attn_block.attn_qkvw.numel()
+                ):
                     pass
                 else:
                     with GatheredParameters(
@@ -701,34 +740,36 @@ def replace_transformer_layer(
                             attn_block.attn_ow,
                             attn_block.attn_ob,
                         ],
-                            modifier_rank=0,
+                        modifier_rank=0,
                     ):
                         attn_block.attn_qkvw = mp_replace.copy(
                             attn_block.attn_qkvw,
-                            quantizer.quantize(qkvw,
-                                               qkv=enable_qkv_quantization,
-                                               force_int8=False),
+                            quantizer.quantize(
+                                qkvw, qkv=enable_qkv_quantization, force_int8=False
+                            ),
                         )
                         attn_block.attn_qkvb = mp_replace.copy(
-                            attn_block.attn_qkvb,
-                            qkvb)
+                            attn_block.attn_qkvb, qkvb
+                        )
 
-                        attn_block.attn_ow = mp_replace.copy(attn_block.attn_ow,
-                                                             quantizer.quantize(dense_w))
-                        attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
+                        attn_block.attn_ow = mp_replace.copy(
+                            attn_block.attn_ow, quantizer.quantize(dense_w)
+                        )
+                        attn_block.attn_ob = mp_replace.copy(
+                            attn_block.attn_ob, dense_b
+                        )
             else:
                 attn_block.attn_qkvw = quantizer.quantize(
-                    mp_replace.qkv_copy(attn_block.attn_qkvw,
-                                        qkvw,
-                                        q_int=enable_qkv_quantization),
+                    mp_replace.qkv_copy(
+                        attn_block.attn_qkvw, qkvw, q_int=enable_qkv_quantization
+                    ),
                     qkv=enable_qkv_quantization,
                 )
                 attn_block.attn_qkvb = mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
                 attn_block.attn_ow = quantizer.quantize(
-                    mp_replace.copy(attn_block.attn_ow,
-                                    dense_w,
-                                    q_int=quantize))
+                    mp_replace.copy(attn_block.attn_ow, dense_w, q_int=quantize)
+                )
 
                 attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
 
@@ -737,62 +778,64 @@ def replace_transformer_layer(
                 gpu_index = 0
                 for ep_index in range(local_ep_size):
                     mpl_block[ep_index].inter_w.data = _h4h_w[
-                        gpu_index * local_ep_size + ep_index].to(
-                            torch.cuda.current_device())
+                        gpu_index * local_ep_size + ep_index
+                    ].to(torch.cuda.current_device())
                     mpl_block[ep_index].inter_b.data = _h4h_b[
-                        gpu_index * local_ep_size + ep_index].to(
-                            torch.cuda.current_device())
+                        gpu_index * local_ep_size + ep_index
+                    ].to(torch.cuda.current_device())
                     mpl_block[ep_index].output_w.data = _4hh_w[
-                        gpu_index * local_ep_size + ep_index].to(
-                            torch.cuda.current_device())
+                        gpu_index * local_ep_size + ep_index
+                    ].to(torch.cuda.current_device())
                     mpl_block[ep_index].output_b.data = _4hh_b[
-                        gpu_index * local_ep_size + ep_index].to(
-                            torch.cuda.current_device())
+                        gpu_index * local_ep_size + ep_index
+                    ].to(torch.cuda.current_device())
                 new_module.attn_nw.data = attn_nw.to(torch.cuda.current_device())
                 new_module.attn_nb.data = attn_nb.to(torch.cuda.current_device())
                 if moe_type == "residual":
                     new_module.res_mlp.inter_w.data = _res_h4h_w.to(
-                        torch.cuda.current_device())
+                        torch.cuda.current_device()
+                    )
                     new_module.res_mlp.inter_b.data = _res_h4h_b.to(
-                        torch.cuda.current_device())
+                        torch.cuda.current_device()
+                    )
                     new_module.res_mlp.output_w.data = _res_4hh_w.to(
-                        torch.cuda.current_device())
+                        torch.cuda.current_device()
+                    )
                     new_module.res_mlp.output_b.data = _res_4hh_b.to(
-                        torch.cuda.current_device())
+                        torch.cuda.current_device()
+                    )
                     new_module.res_coef.data = _res_coef.to(torch.cuda.current_device())
             else:
                 if _4hh_w.numel() == 0 or _4hh_w.is_meta:
-                    if (_4hh_w.is_meta
-                            or _4hh_w.ds_tensor.numel() < mpl_block.inter_w.numel()):
+                    if (
+                        _4hh_w.is_meta
+                        or _4hh_w.ds_tensor.numel() < mpl_block.inter_w.numel()
+                    ):
                         pass
                     else:
-                        with GatheredParameters([_h4h_w,
-                                                 _4hh_w,
-                                                 _4hh_w,
-                                                 _4hh_b],
-                                                modifier_rank=0):
+                        with GatheredParameters(
+                            [_h4h_w, _4hh_w, _4hh_w, _4hh_b], modifier_rank=0
+                        ):
                             mpl_block.inter_w = mp_replace.copy(
-                                mpl_block.inter_w,
-                                quantizer.quantize(_h4h_w))
+                                mpl_block.inter_w, quantizer.quantize(_h4h_w)
+                            )
                             mpl_block.inter_b = mp_replace.copy(
-                                mpl_block.inter_b,
-                                _h4h_b)
+                                mpl_block.inter_b, _h4h_b
+                            )
                             mpl_block.output_w = mp_replace.copy(
-                                mpl_block.output_w,
-                                quantizer.quantize(_4hh_w))
+                                mpl_block.output_w, quantizer.quantize(_4hh_w)
+                            )
                             mpl_block.output_b = mp_replace.copy(
-                                mpl_block.output_b,
-                                _4hh_b)
+                                mpl_block.output_b, _4hh_b
+                            )
                 else:
                     mpl_block.inter_w = quantizer.quantize(
-                        mp_replace.copy(mpl_block.inter_w,
-                                        _h4h_w,
-                                        q_int=quantize))
+                        mp_replace.copy(mpl_block.inter_w, _h4h_w, q_int=quantize)
+                    )
                     mpl_block.inter_b = mp_replace.copy(mpl_block.inter_b, _h4h_b)
                     mpl_block.output_w = quantizer.quantize(
-                        mp_replace.copy(mpl_block.output_w,
-                                        _4hh_w,
-                                        q_int=quantize))
+                        mp_replace.copy(mpl_block.output_w, _4hh_w, q_int=quantize)
+                    )
                     mpl_block.output_b = mp_replace.copy(mpl_block.output_b, _4hh_b)
 
                 if attn_nw is None:
@@ -800,31 +843,44 @@ def replace_transformer_layer(
                     new_module.mlp.attn_nb = attn_nb
                 else:
                     if attn_nw.is_meta or attn_nw.numel() == 0:
-                        if (attn_nw.is_meta or attn_nw.ds_tensor.numel() <
-                                new_module.mlp.attn_nw.numel()):
+                        if (
+                            attn_nw.is_meta
+                            or attn_nw.ds_tensor.numel()
+                            < new_module.mlp.attn_nw.numel()
+                        ):
                             pass
                         else:
-                            with GatheredParameters([attn_nw, attn_nb], modifier_rank=0):
+                            with GatheredParameters(
+                                [attn_nw, attn_nb], modifier_rank=0
+                            ):
                                 new_module.mlp.attn_nw.data.copy_(
-                                    attn_nw.to(torch.cuda.current_device()))
+                                    attn_nw.to(torch.cuda.current_device())
+                                )
                                 new_module.mlp.attn_nb.data.copy_(
-                                    attn_nb.to(torch.cuda.current_device()))
+                                    attn_nb.to(torch.cuda.current_device())
+                                )
                     else:
                         new_module.mlp.attn_nw.data.copy_(
-                            attn_nw.to(torch.cuda.current_device()))
+                            attn_nw.to(torch.cuda.current_device())
+                        )
                         new_module.mlp.attn_nb.data.copy_(
-                            attn_nb.to(torch.cuda.current_device()))
+                            attn_nb.to(torch.cuda.current_device())
+                        )
 
             if input_nw.is_meta or input_nw.numel() == 0:
-                if (input_nw.is_meta
-                        or input_nw.ds_tensor.numel() < new_module.norm_w.numel()):
+                if (
+                    input_nw.is_meta
+                    or input_nw.ds_tensor.numel() < new_module.norm_w.numel()
+                ):
                     pass
                 else:
                     with GatheredParameters([input_nw, input_nb], modifier_rank=0):
                         new_module.norm_w.data.copy_(
-                            input_nw.to(torch.cuda.current_device()))
+                            input_nw.to(torch.cuda.current_device())
+                        )
                         new_module.norm_b.data.copy_(
-                            input_nb.to(torch.cuda.current_device()))
+                            input_nb.to(torch.cuda.current_device())
+                        )
             else:
                 new_module.norm_w.data.copy_(input_nw.to(torch.cuda.current_device()))
                 new_module.norm_b.data.copy_(input_nb.to(torch.cuda.current_device()))
@@ -837,9 +893,9 @@ def replace_transformer_layer(
                 hidden_dropout_ratio=config.hidden_dropout_prob,
                 num_hidden_layers=config.num_hidden_layers,
                 initializer_range=config.initializer_range,
-                layer_norm_eps=config.layer_norm_eps if hasattr(
-                    config,
-                    "layer_norm_eps") else 1e-12,
+                layer_norm_eps=config.layer_norm_eps
+                if hasattr(config, "layer_norm_eps")
+                else 1e-12,
                 seed=seed,
                 fp16=fp16,
                 pre_layer_norm=policy.pre_attn_norm,
@@ -869,8 +925,9 @@ def replace_transformer_layer(
     def replace_wo_policy(module, all_reduce_linears):
         def _replace(child, name, conv_linear_layer):
             mp_replace = ReplaceWithTensorSlicing(mp_group=mp_group)
-            z_inference = (len(list(child.parameters())) > 0) and (list(
-                child.parameters())[0].numel() == 0)
+            z_inference = (len(list(child.parameters())) > 0) and (
+                list(child.parameters())[0].numel() == 0
+            )
             if z_inference:
                 weight_shape = child.weight.ds_shape
             else:
@@ -879,15 +936,16 @@ def replace_transformer_layer(
                 new_weight = torch.empty(
                     (
                         weight_shape[1] if conv_linear_layer else weight_shape[0],
-                        (weight_shape[0] if conv_linear_layer else weight_shape[1]) //
-                        mp_size,
+                        (weight_shape[0] if conv_linear_layer else weight_shape[1])
+                        // mp_size,
                     ),
                     device=child.weight.device,
                     dtype=child.weight.dtype,
                 )
                 if z_inference:
-                    with deepspeed.zero.GatheredParameters(child.weight,
-                                                           modifier_rank=0):
+                    with deepspeed.zero.GatheredParameters(
+                        child.weight, modifier_rank=0
+                    ):
                         data = child.weight.data.to(new_weight.device)
                         if conv_linear_layer:
                             data = data.transpose(-1, -2).contiguous()
@@ -895,8 +953,9 @@ def replace_transformer_layer(
                     child.weight.ds_tensor = torch.empty(1)
                 else:
                     if conv_linear_layer:
-                        child.weight.data = child.weight.data.transpose(-1,
-                                                                        -2).contiguous()
+                        child.weight.data = child.weight.data.transpose(
+                            -1, -2
+                        ).contiguous()
                     data = mp_replace.copy(new_weight, child.weight.data)
                 new_bias = torch.empty(
                     (weight_shape[0]),
@@ -910,24 +969,29 @@ def replace_transformer_layer(
                     new_bias.data.copy_(child.bias.data)
                 return LinearAllreduce(
                     data,
-                    child.bias if child.bias is None else torch.nn.parameter.Parameter(
-                        new_bias.to(torch.cuda.current_device())),
+                    child.bias
+                    if child.bias is None
+                    else torch.nn.parameter.Parameter(
+                        new_bias.to(torch.cuda.current_device())
+                    ),
                     mp_group,
                 )
             else:
                 new_weight = torch.empty(
                     (
-                        (weight_shape[1] if conv_linear_layer else weight_shape[0]) //
-                        mp_size,
-                        weight_shape[0] //
-                        mp_size if conv_linear_layer else weight_shape[1],
+                        (weight_shape[1] if conv_linear_layer else weight_shape[0])
+                        // mp_size,
+                        weight_shape[0] // mp_size
+                        if conv_linear_layer
+                        else weight_shape[1],
                     ),
                     device=child.weight.device,
                     dtype=child.weight.dtype,
                 )
                 if z_inference:
-                    with deepspeed.zero.GatheredParameters(child.weight,
-                                                           modifier_rank=0):
+                    with deepspeed.zero.GatheredParameters(
+                        child.weight, modifier_rank=0
+                    ):
                         data = child.weight.data.to(new_weight.device)
                         if conv_linear_layer:
                             data = data.transpose(-1, -2).contiguous()
@@ -935,8 +999,9 @@ def replace_transformer_layer(
                     child.weight.ds_tensor = torch.empty(1)
                 else:
                     if conv_linear_layer:
-                        child.weight.data = child.weight.data.transpose(-1,
-                                                                        -2).contiguous()
+                        child.weight.data = child.weight.data.transpose(
+                            -1, -2
+                        ).contiguous()
                     data = mp_replace.copy(new_weight, child.weight.data)
 
                 new_bias = torch.empty(
@@ -946,32 +1011,41 @@ def replace_transformer_layer(
                 )
                 if z_inference:
                     with deepspeed.zero.GatheredParameters(child.bias, modifier_rank=0):
-                        bias_data = (None if child.bias is None else mp_replace.copy(
-                            new_bias,
-                            child.bias.data).to(torch.cuda.current_device()))
+                        bias_data = (
+                            None
+                            if child.bias is None
+                            else mp_replace.copy(new_bias, child.bias.data).to(
+                                torch.cuda.current_device()
+                            )
+                        )
                 else:
-                    bias_data = (None if child.bias is None else mp_replace.copy(
-                        new_bias,
-                        child.bias.data).to(torch.cuda.current_device()))
-                return LinearLayer(weight=data.to(torch.cuda.current_device()),
-                                   bias=bias_data)
+                    bias_data = (
+                        None
+                        if child.bias is None
+                        else mp_replace.copy(new_bias, child.bias.data).to(
+                            torch.cuda.current_device()
+                        )
+                    )
+                return LinearLayer(
+                    weight=data.to(torch.cuda.current_device()), bias=bias_data
+                )
 
         def _slice_embedding(child, name, conv_linear_layer):
             mp_replace = ReplaceWithTensorSlicing(mp_group=mp_group)
             new_weight = torch.empty(
-                (child.weight.shape[0],
-                 child.weight.shape[1] // mp_size),
+                (child.weight.shape[0], child.weight.shape[1] // mp_size),
                 device=child.weight.device,
                 dtype=child.weight.dtype,
             )
             data = mp_replace.copy(
                 new_weight,
                 child.weight.ds_tensor.data
-                if hasattr(child.weight,
-                           "ds_tensor") else child.weight.data,
+                if hasattr(child.weight, "ds_tensor")
+                else child.weight.data,
             )
-            new_embedding = nn.Embedding(child.weight.shape[0],
-                                         child.weight.shape[1] // mp_size)
+            new_embedding = nn.Embedding(
+                child.weight.shape[0], child.weight.shape[1] // mp_size
+            )
             new_embedding.weight.data.copy_(data)
             return new_embedding
 
@@ -1014,9 +1088,9 @@ def replace_transformer_layer(
                     setattr(
                         r_module,
                         name,
-                        linear_policies[child.__class__](child,
-                                                         prev_name + "." + name,
-                                                         conv_linear_layer),
+                        linear_policies[child.__class__](
+                            child, prev_name + "." + name, conv_linear_layer
+                        ),
                     )
                 else:
                     update_mp_params(child)
@@ -1072,9 +1146,9 @@ def replace_transformer_layer(
 
             for i in range(len(checkpoint)):
                 sd = [
-                    torch.load(os.path.join(base_dir1,
-                                            checkpoint[i]),
-                               map_location="cpu")
+                    torch.load(
+                        os.path.join(base_dir1, checkpoint[i]), map_location="cpu"
+                    )
                 ]
                 load_model_with_checkpoint(
                     replaced_module,
@@ -1101,15 +1175,14 @@ def replace_transformer_layer(
                 pbar.update(1)
                 ckpt_index = i * ckpt_mp_size + sd_offset
                 ckpt_files = [
-                    os.path.join(base_dir1,
-                                 ckpt_list[ckpt_index +
-                                           j]) if base_dir1 else ckpt_list[ckpt_index +
-                                                                           j]
+                    os.path.join(base_dir1, ckpt_list[ckpt_index + j])
+                    if base_dir1
+                    else ckpt_list[ckpt_index + j]
                     for j in range(sd_count)
                 ]
                 sds = [
-                    torch.load(ckpt_file,
-                               map_location="cpu") for ckpt_file in ckpt_files
+                    torch.load(ckpt_file, map_location="cpu")
+                    for ckpt_file in ckpt_files
                 ]
                 load_model_with_checkpoint(
                     replaced_module,
@@ -1132,9 +1205,11 @@ def replace_transformer_layer(
 
                 for i in range(len(checkpoint["non_tp"])):
                     pbar.update(1)
-                    ckpt_file = (os.path.join(base_dir1,
-                                              checkpoint["non_tp"][i])
-                                 if base_dir1 else checkpoint["non_tp"][i])
+                    ckpt_file = (
+                        os.path.join(base_dir1, checkpoint["non_tp"][i])
+                        if base_dir1
+                        else checkpoint["non_tp"][i]
+                    )
                     sds = [torch.load(ckpt_file, map_location="cpu")]
                     load_model_with_checkpoint(
                         replaced_module,
@@ -1176,37 +1251,36 @@ def replace_transformer_layer(
         if not dist.is_initialized() or dist.get_rank() == 0:
             print("Saving tp-sharded checkpoints")
             torch.save(
-                OrderedDict({
-                    k: v
-                    for k,
-                    v in dict(replaced_module.state_dict()).items()
-                    if transformer_name not in k
-                }),
+                OrderedDict(
+                    {
+                        k: v
+                        for k, v in dict(replaced_module.state_dict()).items()
+                        if transformer_name not in k
+                    }
+                ),
                 f"{save_mp_checkpoint_path}/{non_tp_ckpt_name}",
             )
-            config = json.dumps({
-                "type":
-                ckpt_name,
-                "base_dir":
-                f"{save_mp_checkpoint_path}",
-                "checkpoints": {
-                    "non_tp":
-                    ckpt_files,
-                    "tp": [
-                        f"tp_{r:0>2d}_{m:0>2d}.pt" for m in range(num_partitions)
-                        for r in range(world_size)
-                    ],
-                },
-                "version":
-                1.0,
-                "parallelization":
-                "tp",
-                "tp_size":
-                world_size,
-                "dtype":
-                "int8" if quantize else ("float16" if fp16 else "float32"),
-            })
-            with open(f"{save_mp_checkpoint_path}/ds-inference_config.json", "w") as cfg:
+            config = json.dumps(
+                {
+                    "type": ckpt_name,
+                    "base_dir": f"{save_mp_checkpoint_path}",
+                    "checkpoints": {
+                        "non_tp": ckpt_files,
+                        "tp": [
+                            f"tp_{r:0>2d}_{m:0>2d}.pt"
+                            for m in range(num_partitions)
+                            for r in range(world_size)
+                        ],
+                    },
+                    "version": 1.0,
+                    "parallelization": "tp",
+                    "tp_size": world_size,
+                    "dtype": "int8" if quantize else ("float16" if fp16 else "float32"),
+                }
+            )
+            with open(
+                f"{save_mp_checkpoint_path}/ds-inference_config.json", "w"
+            ) as cfg:
                 cfg.write(config)
 
         rep_sd = replaced_module.state_dict()
@@ -1217,13 +1291,15 @@ def replace_transformer_layer(
         partition_size = len(keys) // num_partitions + 1
         for m in range(num_partitions):
             torch.save(
-                OrderedDict({
-                    k: [rep_sd[k],
-                        rep_sd[k].scale] if hasattr(rep_sd[k],
-                                                    "scale") else rep_sd[k]
-                    for k in keys[m * partition_size:(m + 1) * partition_size]
-                    if transformer_name in k
-                }),
+                OrderedDict(
+                    {
+                        k: [rep_sd[k], rep_sd[k].scale]
+                        if hasattr(rep_sd[k], "scale")
+                        else rep_sd[k]
+                        for k in keys[m * partition_size : (m + 1) * partition_size]
+                        if transformer_name in k
+                    }
+                ),
                 f"{save_mp_checkpoint_path}/tp_{rank:0>2d}_{m:0>2d}.pt",
             )
 
@@ -1240,6 +1316,7 @@ def revert_transformer_layer(orig_layer_impl, model, config, preln=False):
     Returns:
         Updated nn.module with original bert-style transformer layers
     """
+
     def replace_fn(child, _replace_policy, layer_id):
         # from turing.nvidia_modelingpreln import BertLayer
         orig_module = orig_layer_impl(config)
@@ -1344,9 +1421,9 @@ def _replace_module(model, policies, layer_id=0):
     """
     for name, child in model.named_children():
         if child.__class__ in policies:
-            replaced_module = policies[child.__class__][0](child,
-                                                           policies[child.__class__][-1],
-                                                           layer_id)
+            replaced_module = policies[child.__class__][0](
+                child, policies[child.__class__][-1], layer_id
+            )
 
             setattr(model, name, replaced_module)
             if isinstance(model, PipelineModule):
