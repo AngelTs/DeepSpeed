@@ -288,7 +288,7 @@ class DeepSpeedSelfAttention(nn.Module):
         super(DeepSpeedSelfAttention, self).__init__()
         self.config = config
         data_type = (
-            torch.int8 if config.q_int8 else torch.half if config.fp16 else torch.float
+            torch.int8 if config.q_int else torch.half if config.fp16 else torch.float
         )
         data_type_fp = torch.half if config.fp16 else torch.float
         self.config.layer_id = DeepSpeedSelfAttention.num_layers
@@ -358,17 +358,17 @@ class DeepSpeedSelfAttention(nn.Module):
         self.qkv_merging = qkv_merging
         self.score_context_func = (
             inference_cuda_module.softmax_context_fp16
-            if (config.fp16 or config.q_int8)
+            if (config.fp16 or config.q_int)
             else inference_cuda_module.softmax_context_fp32
         )
         self.qkv_func = (
             inference_cuda_module.qkv_gemm_fp16
-            if config.fp16 or config.q_int8
+            if config.fp16 or config.q_int
             else inference_cuda_module.qkv_gemm_fp32
         )
         self.vector_matmul_func = (
             inference_cuda_module.vector_matmul_fp16
-            if config.fp16 or config.q_int8
+            if config.fp16 or config.q_int
             else inference_cuda_module.vector_matmul_fp32
         )
         self.linear_func = (
@@ -551,7 +551,7 @@ class DeepSpeedMLP(nn.Module):
 
         self.config = config
         data_type = (
-            torch.int8 if config.q_int8 else torch.half if config.fp16 else torch.float
+            torch.int8 if config.q_int else torch.half if config.fp16 else torch.float
         )
         data_type_fp = torch.half if config.fp16 else torch.float
         device = torch.cuda.current_device() if config.bigscience_bloom else "cpu"
@@ -634,7 +634,7 @@ class DeepSpeedMLP(nn.Module):
 
         self.residual_add_func = (
             inference_cuda_module.residual_add_bias_fp16
-            if config.fp16 or config.q_int8
+            if config.fp16 or config.q_int
             else inference_cuda_module.residual_add_bias_fp32
         )
 

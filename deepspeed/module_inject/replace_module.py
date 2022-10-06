@@ -107,8 +107,8 @@ class ReplaceWithTensorSlicing:
             return src
         src_shape = src.shape
         dst_shape = dst.shape
-        inner_dim = 1 if src.dtype == torch.int8 else 0
-        outer_dim = 0 if src.dtype == torch.int8 else 1
+        inner_dim = 1 if q_int else 0
+        outer_dim = 0 if q_int else 1
         if self.out_dim == 0:
             src_split = torch.split(
                 src.data, src_shape[outer_dim] // self.mp_size, dim=0
@@ -169,15 +169,13 @@ class ReplaceWithTensorSlicing:
     def copy(self, dst, src, q_int=False):
         if src is None:
             return src
-        inner_dim = 1 if src.dtype == torch.int8 else 0
-        outer_dim = 0 if src.dtype == torch.int8 else 1
+        inner_dim = 1 if q_int else 0
+        outer_dim = 0 if q_int else 1
         src_shape = src.shape
         dst_shape = dst.shape
         if len(src_shape) == 2 and len(dst_shape) == 2:
-            if (
-                src_shape[inner_dim] == dst_shape[self.in_dim]
-                and src_shape[outer_dim] == dst_shape[self.out_dim]
-            ):
+            if src_shape[inner_dim] == dst_shape[
+                    self.in_dim] and src_shape[outer_dim] == dst_shape[self.out_dim]:
                 dst = src
             else:
                 if src_shape[inner_dim] != dst_shape[self.in_dim]:
@@ -198,10 +196,10 @@ class ReplaceWithTensorSlicing:
                         .to(torch.cuda.current_device())
                         .contiguous()
                     )
-                dst = weight_split.contiguous()
+                dst.data.copy_(weight_split.contiguous())
         else:
             if src_shape[0] == dst_shape[0]:
-                dst = src
+                dst.data.copy_(src)
             else:
                 bias_split = (
                     torch.split(src.data, dst_shape[-1])[self.gpu_index]

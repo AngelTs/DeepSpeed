@@ -860,7 +860,7 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
                             bool q_int,
                             unsigned q_bits)
 {
-    int out_size = q_int8 ? weight.size(0) : weight.size(1);
+    int out_size = q_int ? weight.size(0) : weight.size(1);
     auto options = at::TensorOptions()
                        .dtype(input.options().dtype())
                        .layout(at::kStrided)
@@ -1043,6 +1043,7 @@ at::Tensor mlp_unfused_cublas(T* output,
                                Context::Instance().GetCurrentStream());
     if (q_int) {
         int out_size = weight.size(0);
+        int bsz1;
         if (q_bits == 4 && 0) {
             // 128-aligned
             bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
