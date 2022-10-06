@@ -231,7 +231,7 @@ def get_transformer_name(replaced_module):
     return transformer_name
 
 
-class GroupQuantizer:
+class GroupQuantizer2:
     def __init__(self, q_int8=True, num_groups=32, group_size=32, num_bits=8):
         self.num_groups = num_groups
         self.group_size = group_size
@@ -439,9 +439,6 @@ def replace_transformer_layer(
             q_int=quantize, num_bits=quantize_bits, num_groups=quantize_groups
         )
 
-        # expert_mp_replace = ReplaceWithTensorSlicing(mp_group=expert_mp_group)
-
-        quantizer = GroupQuantizer(q_int8=quantize)
         if inference:
             if moe:
                 ep_world_size = dist.get_world_size()
@@ -1111,7 +1108,7 @@ def replace_transformer_layer(
         _replace_policy=policy,
     )
 
-    quantizer = GroupQuantizer(q_int8=quantize)
+    quantizer = GroupQuantizer(q_int=quantize)
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     rank = dist.get_rank() if dist.is_initialized() else 0
     if checkpoint_dict is not None:

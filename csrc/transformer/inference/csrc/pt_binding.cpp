@@ -655,6 +655,7 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
                                     bool add_bias,
                                     unsigned num_layers,
                                     unsigned mp_size,
+                                    unsigned rank,
                                     bool q_int,
                                     unsigned q_bits)
 {

@@ -258,12 +258,39 @@ void run_gemm(void* A,
               int groups1,
               cudaStream_t stream);
 
+void run_gemm_int4(void* A,
+                   void* B,
+                   void* C,
+                   void* a,
+                   void* aa,
+                   int M,
+                   int N,
+                   int K,
+                   int groups,
+                   int groups1,
+                   cudaStream_t stream);
+
+void run_quantize_int4(int8_t* output,
+                       float* scales,
+                       __half* input,
+                       int intermediate_size,
+                       int batch_size,
+                       cudaStream_t stream);
+
 void launch_me(int8_t* output,
                float* scales,
                __half* input,
                int intermediate_size,
                int batch_size,
                cudaStream_t stream);
+
+void launch_bias_gelu_int4(int8_t* output,
+                           float* scales,
+                           __half* input,
+                           const __half* bias,
+                           int intermediate_size,
+                           int batch_size,
+                           cudaStream_t stream);
 
 void launch_bias_gelu_int8(int8_t* output,
                            float* scales,
