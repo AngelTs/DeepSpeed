@@ -1,7 +1,6 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
 #include <vector>
-#include "curand.h"
 #include "custom_cuda_layers.h"
 
 template <typename T>

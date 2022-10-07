@@ -547,8 +547,6 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
             bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
         } else {
             bsz1 = (bsz >= 32 && bsz < 128)
-
-        int bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
                        : (bsz % 128 == 0)
                              ? bsz
@@ -681,6 +679,7 @@ std::vector<at::Tensor> ds_qkv_gemm(at::Tensor& input,
 
     auto inp_norm = qkv_unfused_cublas<T>(
         output, input, weight, q_scale, bias, gamma, beta, epsilon, add_bias, q_int, q_bits);
+
     return {output, inp_norm};
 }
 
@@ -854,6 +853,7 @@ at::Tensor ds_linear_layer(at::Tensor& input,
     }
     return output;
 }
+
 template <typename T>
 at::Tensor ds_vector_matmul(at::Tensor& input,
                             at::Tensor& weight,
@@ -972,17 +972,14 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
 at::Tensor act_quantized_gemm(at::Tensor& inp, at::Tensor& weight, at::Tensor q_scale)
 {
     int bsz = inp.size(0) * inp.size(1);
-    int bsz1 =
-        (bsz >= 32 && bsz < 128)
-            ? 128
-            : (bsz % 128 == 0)
-                  ? bsz
-                  : ((128 - (bsz % 128)) > 32 && bsz < 512)
-                        ? ((bsz % 64 == 0) ? bsz
-                                           : ((64 - (bsz % 64)) > 32 && bsz < 32)
-                                                 ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
-                                                 : bsz + (64 - (bsz % 64)))
-                        : bsz + (128 - (bsz % 128));
+    int bsz1 = (bsz >= 32 && bsz < 128) ? 128
+               : (bsz % 128 == 0)       ? bsz
+               : ((128 - (bsz % 128)) > 32 && bsz < 512)
+                   ? ((bsz % 64 == 0) ? bsz
+                      : ((64 - (bsz % 64)) > 32 && bsz < 32)
+                          ? ((bsz % 32 == 0) ? bsz : bsz + (32 - (bsz % 32)))
+                          : bsz + (64 - (bsz % 64)))
+                   : bsz + (128 - (bsz % 128));
     at::Tensor out = at::empty({bsz1, weight.size(0)}, inp.options());
     auto auxilary_buf = (__half*)Context::Instance().GetWorkSpace() +
                         ((Context::Instance().get_workspace_size() / sizeof(__half)) -
@@ -1238,7 +1235,6 @@ at::Tensor ds_mlp_gemm(at::Tensor& input,
     int bsz = input.size(0) * input.size(1);
 
     auto act_func_type = static_cast<ActivationFuncType>(activation_type);
-
     return mlp_unfused_cublas<T>(
         workspace,
         workspace + 4 * input.size(0) * Context::Instance().GetMaxTokenLenght() * input.size(2),

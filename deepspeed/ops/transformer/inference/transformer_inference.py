@@ -1,6 +1,6 @@
-"""
+'''
 Copyright 2020 The Microsoft DeepSpeed Team
-"""
+'''
 import json
 import math
 import torch
@@ -16,7 +16,7 @@ inference_cuda_module = None
 minus_inf = -10000.0
 
 
-class TransformerConfig:
+class TransformerConfig():
     def __init__(self, hidden_size, intermediate_size, heads, num_hidden_layers):
         self.layer_id = -1
         self.hidden_size = hidden_size
@@ -27,65 +27,62 @@ class TransformerConfig:
 
 class DeepSpeedInferenceConfig(TransformerConfig):
     """Initialize the DeepSpeed Transformer Config.
-    Arguments:
-        hidden_size: The hidden size of the transformer layer
-        intermediate_size: The intermediate size of the feed-forward part of transformer layer
-        heads: The number of heads in the self-attention of the transformer layer
-        num_hidden_layers: The number of transformer layers
-        layer_norm_eps: The epsilon value for the layer norm
-        local_rank: Optional: The rank of GPU running the transformer kernel, it is not required
-            to use if the model already set the current device, otherwise need to set it
-            so that the transformer kernel can work on the right device
-        mp_size (optional): This argument is mainly used to create the parameters on the kernel side
-            using model-parallel architecture. If the client model already takes care of this, there is no
-            need to pass this argument.
-        fp16: Enable half-precision computation
-        pre_layer_norm: Select between Pre-LN or Post-LN transformer architecture
-        stochastic_mode:  Enable for high performance, please note that this flag has some level of
-            non-determinism and can produce different results on different runs.  However, we have seen
-            that by enabling it, the pretraining tasks such as BERT are not affected and can obtain
-            a high accuracy level. On the other hand, for the downstream tasks, such as fine-tuning, we recommend
-            to turn it off in order to be able to reproduce the same result through the regular kernel execution.
+        Arguments:
+            hidden_size: The hidden size of the transformer layer
+            intermediate_size: The intermediate size of the feed-forward part of transformer layer
+            heads: The number of heads in the self-attention of the transformer layer
+            num_hidden_layers: The number of transformer layers
+            layer_norm_eps: The epsilon value for the layer norm
+            local_rank: Optional: The rank of GPU running the transformer kernel, it is not required
+                to use if the model already set the current device, otherwise need to set it
+                so that the transformer kernel can work on the right device
+            mp_size (optional): This argument is mainly used to create the parameters on the kernel side
+                using model-parallel architecture. If the client model already takes care of this, there is no
+                need to pass this argument.
+            fp16: Enable half-precision computation
+            pre_layer_norm: Select between Pre-LN or Post-LN transformer architecture
+            stochastic_mode:  Enable for high performance, please note that this flag has some level of
+                non-determinism and can produce different results on different runs.  However, we have seen
+                that by enabling it, the pretraining tasks such as BERT are not affected and can obtain
+                a high accuracy level. On the other hand, for the downstream tasks, such as fine-tuning, we recommend
+                to turn it off in order to be able to reproduce the same result through the regular kernel execution.
 
-        scale_attention: If true, both q and k are scaled by 1/sqrt(attention_heads) before attention computation.
-        return_tuple: if True, returns the transformer output as a tuple, otherwise returns as a tensor
-        bigscience_bloom: This flag is added temporarily for supporting the BLOOM-176B model architecture.
+            scale_attention: If true, both q and k are scaled by 1/sqrt(attention_heads) before attention computation.
+            return_tuple: if True, returns the transformer output as a tuple, otherwise returns as a tensor
+            bigscience_bloom: This flag is added temporarily for supporting the BLOOM-176B model architecture.
     """
-    def __init__(
-        self,
-        hidden_size=-1,
-        intermediate_size=-1,
-        heads=-1,
-        num_hidden_layers=-1,
-        layer_norm_eps=1e-12,
-        local_rank=-1,
-        mp_size=1,
-        fp16=False,
-        q_int=False,
-        q_bits=8,
-        pre_layer_norm=True,
-        stochastic_mode=False,
-        scale_attention=True,
-        triangular_masking=True,
-        local_attention=False,
-        window_size=256,
-        rotary_dim=-1,
-        rotate_half=False,
-        rotate_every_two=True,
-        return_tuple=True,
-        mlp_after_attn=True,
-        mlp_act_func_type=ActivationFuncType.GELU,
-        training_mp_size=1,
-        bigscience_bloom=False,
-        enable_qkv_quantization=False,
-    ):
+    def __init__(self,
+                 hidden_size=-1,
+                 intermediate_size=-1,
+                 heads=-1,
+                 num_hidden_layers=-1,
+                 layer_norm_eps=1e-12,
+                 local_rank=-1,
+                 mp_size=1,
+                 fp16=False,
+                 q_int=False,
+                 q_bits=8,
+                 pre_layer_norm=True,
+                 stochastic_mode=False,
+                 scale_attention=True,
+                 triangular_masking=True,
+                 local_attention=False,
+                 window_size=256,
+                 rotary_dim=-1,
+                 rotate_half=False,
+                 rotate_every_two=True,
+                 return_tuple=True,
+                 mlp_after_attn=True,
+                 mlp_act_func_type=ActivationFuncType.GELU,
+                 training_mp_size=1,
+                 bigscience_bloom=False,
+                 enable_qkv_quantization=False):
         super(DeepSpeedInferenceConfig,
               self).__init__(
                   hidden_size,
                   (intermediate_size if intermediate_size > 0 else 4 * hidden_size),
                   heads,
-                  num_hidden_layers,
-              )
+                  num_hidden_layers)
         self.fp16 = fp16
         self.pre_layer_norm = pre_layer_norm
         self.local_rank = local_rank
@@ -118,50 +115,46 @@ class DeepSpeedInferenceConfig(TransformerConfig):
 
     @classmethod
     def from_json_file(cls, json_file):
-        with open(json_file, "r", encoding="utf-8") as reader:
+        with open(json_file, "r", encoding='utf-8') as reader:
             text = reader.read()
         return cls.from_dict(json.loads(text))
 
 
 class DeepSpeedSelfAttentionFunction(Function):
     @staticmethod
-    def forward(
-        ctx,
-        input,
-        input_mask,
-        head_mask,
-        layer_past,
-        get_present,
-        encoder_hidden_states,
-        encoder_attention_mask,
-        output_attentions,
-        norm_w,
-        norm_b,
-        config,
-        attn_qkvw,
-        attn_qkvb,
-        num_attention_heads_per_partition,
-        norm_factor,
-        hidden_size_per_partition,
-        attn_ow,
-        attn_ob,
-        mp_group,
-        q_scales,
-        q_groups,
-        merge_count,
-        qkv_merging,
-        score_context_func,
-        alibi,
-        qkv_func,
-        vector_matmul_func,
-        linear_func,
-    ):
+    def forward(ctx,
+                input,
+                input_mask,
+                head_mask,
+                layer_past,
+                get_present,
+                encoder_hidden_states,
+                encoder_attention_mask,
+                output_attentions,
+                norm_w,
+                norm_b,
+                config,
+                attn_qkvw,
+                attn_qkvb,
+                num_attention_heads_per_partition,
+                norm_factor,
+                hidden_size_per_partition,
+                attn_ow,
+                attn_ob,
+                mp_group,
+                q_scales,
+                q_groups,
+                merge_count,
+                qkv_merging,
+                score_context_func,
+                alibi,
+                qkv_func,
+                vector_matmul_func,
+                linear_func):
         def _transpose_for_scores(x, key=False, reshape=False):
             attention_head_size = x.shape[-1] // num_attention_heads_per_partition
-            new_x_shape = x.size()[:-1] + (
-                num_attention_heads_per_partition,
-                attention_head_size,
-            )
+            new_x_shape = x.size()[:-1] + (num_attention_heads_per_partition,
+                                           attention_head_size)
             x_1 = x.view(*new_x_shape)
             if key:
                 x_1 = x_1.permute(0, 2, 3, 1)
@@ -173,15 +166,16 @@ class DeepSpeedSelfAttentionFunction(Function):
 
         def _transpose_for_context(x):
             x = x.permute(0, 2, 1, 3).contiguous()
-            new_x_layer_shape = x.size()[:-2] + (hidden_size_per_partition, )
+            new_x_layer_shape = x.size()[:-2] + \
+                                      (hidden_size_per_partition,)
             return x.view(*new_x_layer_shape).contiguous()
 
         def compute_attention(qkv_out, input_mask):
             no_masking = input_mask is None
             if no_masking:
                 input_mask = torch.empty(1)
-            alibi_offset = (dist.get_rank() * num_attention_heads_per_partition
-                            if dist.is_initialized() else 0)
+            alibi_offset = dist.get_rank(
+            ) * num_attention_heads_per_partition if dist.is_initialized() else 0
 
             attn_key_value = score_context_func(
                 qkv_out,
@@ -200,131 +194,102 @@ class DeepSpeedSelfAttentionFunction(Function):
                 DeepSpeedTransformerInference.layer_id,
                 alibi if alibi is not None else torch.empty(1),
                 alibi_offset,
-                config.mp_size,
-            )
+                config.mp_size)
 
             context_layer, key_layer, value_layer = attn_key_value
             return context_layer, key_layer, value_layer
 
         def selfAttention_fp():
             if not config.pre_layer_norm:
-                qkv_out = linear_func(
-                    input,
-                    attn_qkvw,
-                    attn_qkvw.scale,
-                    attn_qkvb,
-                    DeepSpeedTransformerInference.layer_id,
-                    config.bigscience_bloom,
-                    config.mp_size,
-                    config.enable_qkv_quantization,
-                    config.q_bits,
-                )
+                qkv_out = linear_func(input,
+                                      attn_qkvw,
+                                      attn_qkvw.scale,
+                                      attn_qkvb,
+                                      DeepSpeedTransformerInference.layer_id,
+                                      config.bigscience_bloom,
+                                      config.mp_size,
+                                      config.enable_qkv_quantization, config.q_bits)
             else:
-                qkv_out = qkv_func(
-                    input,
-                    attn_qkvw,
-                    attn_qkvw.scale,
-                    (attn_qkvb if attn_qkvb is not None else norm_b),
-                    norm_w,
-                    norm_b,
-                    config.epsilon,
-                    (attn_qkvb is not None),
-                    DeepSpeedTransformerInference.layer_id,
-                    config.mp_size,
-                    dist.get_rank() if dist.is_initialized() else 0,
-                    config.enable_qkv_quantization,
-                    config.q_bits,
-                )
-            context_layer, key_layer, value_layer = compute_attention(
-                qkv_out[0] if isinstance(qkv_out, list) else qkv_out, input_mask
-            )
+                qkv_out = qkv_func(input,
+                                   attn_qkvw,
+                                   attn_qkvw.scale,
+                                   (attn_qkvb if attn_qkvb is not None else norm_b),
+                                   norm_w,
+                                   norm_b,
+                                   config.epsilon,
+                                   (attn_qkvb is not None),
+                                   DeepSpeedTransformerInference.layer_id,
+                                   config.mp_size,
+                                   dist.get_rank() if dist.is_initialized() else 0,
+                                   config.enable_qkv_quantization,
+                                   config.q_bits)
+            context_layer, key_layer, value_layer = compute_attention(qkv_out[0] if isinstance(qkv_out, list) else qkv_out, input_mask)
 
-            output = vector_matmul_func(
-                context_layer,
-                attn_ow,
-                False,
-                attn_ow.scale,
-                config.q_int,
-                config.q_bits,
-            )
+            output = vector_matmul_func(context_layer,
+                                        attn_ow,
+                                        False,
+                                        attn_ow.scale,
+                                        config.q_int,
+                                        config.q_int)
 
             return output, key_layer, value_layer, context_layer, qkv_out[-1]
 
         output, key_layer, value_layer, context_layer, inp_norm = selfAttention_fp()
-        if (config.mlp_after_attn and mp_group is not None
-                and dist.get_world_size(group=mp_group) > 1):
+        if config.mlp_after_attn and mp_group is not None and dist.get_world_size(
+                group=mp_group) > 1:
             dist.all_reduce(output, group=mp_group)
 
         return (output, key_layer, value_layer, context_layer, inp_norm)
 
     @staticmethod
     def backward(ctx, grad_output, grad_output1, grad_output2, grad_output3):
-        raise RuntimeError("You are running with DeepSpeed Inference mode. \
-                            Please switch to Training mode for running backward!")
+        raise RuntimeError('You are running with DeepSpeed Inference mode. \
+                            Please switch to Training mode for running backward!')
 
 
 class DeepSpeedSelfAttention(nn.Module):
     num_layers = 0
 
-    def __init__(
-        self,
-        config,
-        mp_group=None,
-        q_scales=None,
-        q_groups=1,
-        merge_count=1,
-        qkv_merging=False,
-    ):
+    def __init__(self,
+                 config,
+                 mp_group=None,
+                 q_scales=None,
+                 q_groups=1,
+                 merge_count=1,
+                 qkv_merging=False):
         super(DeepSpeedSelfAttention, self).__init__()
         self.config = config
-        data_type = (torch.int8
-                     if config.q_int else torch.half if config.fp16 else torch.float)
+        data_type = torch.int8 if config.q_int else torch.half if config.fp16 else torch.float
         data_type_fp = torch.half if config.fp16 else torch.float
         self.config.layer_id = DeepSpeedSelfAttention.num_layers
         DeepSpeedSelfAttention.num_layers = DeepSpeedSelfAttention.num_layers + 1
-        device = torch.cuda.current_device() if config.bigscience_bloom else "cpu"
+        device = torch.cuda.current_device() if config.bigscience_bloom else 'cpu'
         qkv_size_per_partition = (self.config.hidden_size // self.config.mp_size) * 3
         half_size = config.q_int and config.q_bits == 4
-        self.attn_qkvw = nn.Parameter(
-            torch.empty(
-                self.config.hidden_size // 2 if half_size
+        self.attn_qkvw = nn.Parameter(torch.empty(self.config.hidden_size // 2 if half_size
                 and config.enable_qkv_quantization else self.config.hidden_size,
-                qkv_size_per_partition,
-                dtype=data_type,
-                device=device,
-            ),
-            requires_grad=False,
-        )
-        self.attn_qkvb = nn.Parameter(
-            torch.empty(
-                qkv_size_per_partition,
-                dtype=data_type_fp,
-                device=device,
-            ),
-            requires_grad=False,
-        )
+                                                  qkv_size_per_partition,
+                                                  dtype=data_type,
+                                                  device=device),
+                                      requires_grad=False)
+        self.attn_qkvb = nn.Parameter(torch.empty(qkv_size_per_partition,
+                                                  dtype=data_type_fp,
+                                                  device=device),
+                                      requires_grad=False)
         out_size_per_partition = self.config.hidden_size // self.config.mp_size
-        self.attn_ow = nn.Parameter(
-            torch.empty(
-                (out_size_per_partition // 2) if half_size else out_size_per_partition,
-                self.config.hidden_size,
-                dtype=data_type,
-                device=device,
-            ),
-            requires_grad=False,
-        )
-        self.attn_ob = nn.Parameter(
-            torch.empty(self.config.hidden_size,
-                        dtype=data_type_fp,
-                        device=device),
-            requires_grad=False,
-        )
+        self.attn_ow = nn.Parameter(torch.empty((out_size_per_partition // 2) if half_size else out_size_per_partition,
+                                                self.config.hidden_size,
+                                                dtype=data_type,
+                                                device=device),
+                                    requires_grad=False)
+        self.attn_ob = nn.Parameter(torch.empty(self.config.hidden_size,
+                                                dtype=data_type_fp,
+                                                device=device),
+                                    requires_grad=False)
 
-        self.num_attention_heads_per_partition = (self.config.heads //
-                                                  self.config.mp_size)
+        self.num_attention_heads_per_partition = self.config.heads // self.config.mp_size
         self.hidden_size_per_partition = self.config.hidden_size // self.config.mp_size
-        self.hidden_size_per_attention_head = (self.config.hidden_size //
-                                               self.config.heads)
+        self.hidden_size_per_attention_head = self.config.hidden_size // self.config.heads
 
         global inference_cuda_module
         if inference_cuda_module is None:
@@ -341,20 +306,17 @@ class DeepSpeedSelfAttention(nn.Module):
         self.norm_factor = math.sqrt(
             math.sqrt(self.config.hidden_size // self.config.heads))
         self.qkv_merging = qkv_merging
-        self.score_context_func = (inference_cuda_module.softmax_context_fp16 if
-                                   (config.fp16 or config.q_int) else
-                                   inference_cuda_module.softmax_context_fp32)
-        self.qkv_func = (inference_cuda_module.qkv_gemm_fp16 if config.fp16
-                         or config.q_int else inference_cuda_module.qkv_gemm_fp32)
-        self.vector_matmul_func = (inference_cuda_module.vector_matmul_fp16
-                                   if config.fp16 or config.q_int else
-                                   inference_cuda_module.vector_matmul_fp32)
-        self.linear_func = (inference_cuda_module.linear_layer_fp16
-                            if config.fp16 else inference_cuda_module.linear_layer_fp32)
+        self.score_context_func = inference_cuda_module.softmax_context_fp16 if (config.fp16 or config.q_int) else \
+                                    inference_cuda_module.softmax_context_fp32
+        self.qkv_func = inference_cuda_module.qkv_gemm_fp16 if config.fp16 or config.q_int else \
+                                    inference_cuda_module.qkv_gemm_fp32
+        self.vector_matmul_func = inference_cuda_module.vector_matmul_fp16 if config.fp16 or config.q_int else \
+                                    inference_cuda_module.vector_matmul_fp32
+        self.linear_func = inference_cuda_module.linear_layer_fp16 if config.fp16 else \
+                                    inference_cuda_module.linear_layer_fp32
 
-        self.score_context_func = (inference_cuda_module.softmax_context_fp16 if
-                                   (config.fp16 or config.q_int) else
-                                   inference_cuda_module.softmax_context_fp32)
+        self.score_context_func = inference_cuda_module.softmax_context_fp32 if (not config.fp16) else \
+                                    inference_cuda_module.softmax_context_fp16
 
     def forward(
         self,

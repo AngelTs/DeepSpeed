@@ -372,7 +372,6 @@ __global__ void gptj_residual_add(__half* input,
 
         float2 low_bias = __half22float2(bias_half[0]);
         float2 high_bias = __half22float2(bias_half[1]);
-
         if (attn_bias) {
             float2 attn_bias_vec = attnbias_cast[offset % intermediate_size];
             __half2* attnbias_half = reinterpret_cast<__half2*>(&attn_bias_vec);
