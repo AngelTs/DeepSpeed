@@ -167,9 +167,7 @@ def packInt4(input, output=None):
     output = torch.bitwise_or(compress0, compress1)
     return output
 
-
 class GroupQuantizer:
-
     def __init__(self, q_int=True, num_groups=32, group_size=32, num_bits=8):
         self.num_groups = num_groups
         self.group_size = group_size
@@ -178,6 +176,7 @@ class GroupQuantizer:
 
     def quantize(self, inputs, qkv=True, parallel_dim=0, force_int8=False):
         if not self.q_int or not qkv:
+            print(self.q_int, qkv)
             inputs = torch.nn.Parameter(inputs, requires_grad=False)
             inputs.scale = torch.empty(1)
             return inputs
@@ -222,6 +221,7 @@ class GroupQuantizer:
                                scale1[1]],
                               dim=0).reshape(self.num_groups,
                                              -1).contiguous()
+        print(f"inputs.shape = {inputs.shape}, out.shape: {out.shape}, out.scale.shape: {out.scale.shape}")
         return out
 
 
@@ -620,6 +620,9 @@ def replace_transformer_layer(orig_layer_impl,
                 attn_block.attn_qkvb = \
                     mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
+                print(f"quantizer.num_bits = {quantizer.num_bits}")
+                print(f"attn_block.attn_ow {attn_block.attn_ow.shape}")
+                print(f"dense_w = {dense_w.shape})")
                 attn_block.attn_ow = quantizer.quantize(
                     mp_replace.copy(attn_block.attn_ow,
                                     dense_w,
@@ -922,7 +925,7 @@ def replace_transformer_layer(orig_layer_impl,
                                      replace_fn=replace_fn,
                                      _replace_policy=policy)
 
-    quantizer = GroupQuantizer(q_int=quantize)
+    quantizer = GroupQuantizer(q_int=quantize, num_bits=quantize_bits)
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     rank = dist.get_rank() if dist.is_initialized() else 0
     if checkpoint_dict is not None:
