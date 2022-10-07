@@ -547,6 +547,8 @@ at::Tensor qkv_unfused_cublas(at::Tensor& output,
             bsz1 = bsz % 128 == 0 ? bsz : (bsz / 128 + 1) * 128;
         } else {
             bsz1 = (bsz >= 32 && bsz < 128)
+
+        int bsz1 = (bsz >= 32 && bsz < 128)
                        ? 128
                        : (bsz % 128 == 0)
                              ? bsz

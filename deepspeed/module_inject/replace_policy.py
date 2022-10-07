@@ -23,8 +23,7 @@ class DSPolicy(ABC):
         # the type of activation function used in MLP
         mlp_act_func_type=ActivationFuncType.GELU,
         # applies layer norm before attention if `pre_attn_norm` is set to True
-        pre_attn_norm=True,
-    ):
+        pre_attn_norm=True):
         self.cuda_graph_supported = False
         self.inference = inference
         self.linear_layer = linear_layer
@@ -78,19 +77,16 @@ class HFBertLayerPolicy(DSPolicy):
         if HFBertLayerPolicy._orig_layer_class is None:
             try:
                 import transformers
-
                 HFBertLayerPolicy._orig_layer_class = [
                     transformers.models.bert.modeling_bert.BertLayer,
-                    transformers.models.roberta.modeling_roberta.RobertaLayer,
+                    transformers.models.roberta.modeling_roberta.RobertaLayer
                 ]
             except:
                 HFBertLayerPolicy._orig_layer_class = None
 
     def get_hidden_heads(self):
-        return (
-            self.client_module.attention.self.query.weight.shape[1],
-            self.client_module.attention.self.num_attention_heads,
-        )
+        return self.client_module.attention.self.query.weight.shape[1], \
+                self.client_module.attention.self.num_attention_heads
 
     def attention(self):
         qw = self.client_module.attention.self.query.weight
@@ -103,15 +99,13 @@ class HFBertLayerPolicy(DSPolicy):
         qkvw = Parameter(torch.cat((qw, kw, vw), dim=0), requires_grad=False)
         qkvb = Parameter(torch.cat((qb, kb, vb), dim=0), requires_grad=False)
 
-        return (
-            self.linear_layer,
-            qkvw,
-            qkvb,
-            self.client_module.attention.output.dense.weight,
-            self.client_module.attention.output.dense.bias,
-            self.scale_attention,
-            self.is_megatron_v2,
-        )
+        return self.linear_layer, \
+               qkvw, \
+               qkvb, \
+               self.client_module.attention.output.dense.weight, \
+               self.client_module.attention.output.dense.bias, \
+               self.scale_attention, \
+               self.is_megatron_v2
 
     def mlp(self):
         if self.pre_attn_norm:
@@ -119,13 +113,9 @@ class HFBertLayerPolicy(DSPolicy):
         else:
             intermediate_ff = self.client_module.intermediate.dense
 
-        return (
-            self.linear_layer,
-            intermediate_ff.weight,
-            intermediate_ff.bias,
-            self.client_module.output.dense.weight,
-            self.client_module.output.dense.bias,
-        )
+        return self.linear_layer, intermediate_ff.weight, intermediate_ff.bias, \
+            self.client_module.output.dense.weight, \
+            self.client_module.output.dense.bias
 
     def layerNorm(self):
         if self.pre_attn_norm:
@@ -134,12 +124,10 @@ class HFBertLayerPolicy(DSPolicy):
         else:
             attention_layernorm = self.client_module.attention.output.LayerNorm
             transformer_layernorm = self.client_module.output.LayerNorm
-        return (
-            attention_layernorm.weight,
-            attention_layernorm.bias,
-            transformer_layernorm.weight,
-            transformer_layernorm.bias,
-        )
+        return attention_layernorm.weight, \
+               attention_layernorm.bias, \
+               transformer_layernorm.weight, \
+               transformer_layernorm.bias
 
 
 class HFGPTNEOLayerPolicy(DSPolicy):
@@ -150,17 +138,13 @@ class HFGPTNEOLayerPolicy(DSPolicy):
         self.client_module = client_module
         try:
             import transformers
-
-            HFGPTNEOLayerPolicy._orig_layer_class = (
-                transformers.models.gpt_neo.modeling_gpt_neo.GPTNeoBlock)
+            HFGPTNEOLayerPolicy._orig_layer_class = transformers.models.gpt_neo.modeling_gpt_neo.GPTNeoBlock
         except:
             HFGPTNEOLayerPolicy._orig_layer_class = None
 
     def get_hidden_heads(self):
-        return (
-            self.client_module.attn.attention.q_proj.weight.shape[1],
-            self.client_module.attn.attention.num_heads,
-        )
+        return self.client_module.attn.attention.q_proj.weight.shape[1], \
+                self.client_module.attn.attention.num_heads
 
     def attention(self):
         qw = self.client_module.attn.attention.q_proj.weight
@@ -169,32 +153,26 @@ class HFGPTNEOLayerPolicy(DSPolicy):
 
         qkvw = Parameter(torch.cat((qw, kw, vw), dim=0), requires_grad=False)
 
-        return (
-            self.linear_layer,
-            qkvw,
-            None,
-            self.client_module.attn.attention.out_proj.weight,
-            self.client_module.attn.attention.out_proj.bias,
-            self.scale_attention,
-            self.is_megatron_v2,
-        )
+        return self.linear_layer, \
+                qkvw, \
+                None, \
+                self.client_module.attn.attention.out_proj.weight, \
+                self.client_module.attn.attention.out_proj.bias, \
+                self.scale_attention, \
+               self.is_megatron_v2
 
     def mlp(self):
-        return (
-            self.linear_layer,
-            self.client_module.mlp.c_fc.weight,
-            self.client_module.mlp.c_fc.bias,
-            self.client_module.mlp.c_proj.weight,
-            self.client_module.mlp.c_proj.bias,
-        )
+        return self.linear_layer, \
+                self.client_module.mlp.c_fc.weight, \
+                self.client_module.mlp.c_fc.bias, \
+                self.client_module.mlp.c_proj.weight, \
+                self.client_module.mlp.c_proj.bias
 
     def layerNorm(self):
-        return (
-            self.client_module.ln_2.weight,
-            self.client_module.ln_2.bias,
-            self.client_module.ln_1.weight,
-            self.client_module.ln_1.bias,
-        )
+        return self.client_module.ln_2.weight, \
+               self.client_module.ln_2.bias, \
+               self.client_module.ln_1.weight, \
+               self.client_module.ln_1.bias
 
 
 class HFGPTJLayerPolicy(DSPolicy):
@@ -205,17 +183,13 @@ class HFGPTJLayerPolicy(DSPolicy):
         self.client_module = client_module
         try:
             import transformers
-
-            HFGPTJLayerPolicy._orig_layer_class = (
-                transformers.models.gptj.modeling_gptj.GPTJBlock)
+            HFGPTJLayerPolicy._orig_layer_class = transformers.models.gptj.modeling_gptj.GPTJBlock
         except:
             HFGPTJLayerPolicy._orig_layer_class = None
 
     def get_hidden_heads(self):
-        return (
-            self.client_module.attn.q_proj.weight.shape[1],
-            self.client_module.attn.num_attention_heads,
-        )
+        return self.client_module.attn.q_proj.weight.shape[1], \
+                self.client_module.attn.num_attention_heads
 
     def attention(self):
         qw = self.client_module.attn.q_proj.weight
@@ -224,33 +198,32 @@ class HFGPTJLayerPolicy(DSPolicy):
 
         qkvw = Parameter(torch.cat((qw, kw, vw), dim=0), requires_grad=False)
 
-        return (
-            self.linear_layer,
-            qkvw,
-            None,
-            self.client_module.attn.out_proj.weight,
-            None,
-            self.scale_attention,
-            self.is_megatron_v2,
-        )
+        return self.linear_layer, \
+            qkvw, \
+            None, \
+            self.client_module.attn.out_proj.weight, \
+            None, \
+            self.scale_attention, \
+            self.is_megatron_v2
 
     def mlp(self):
-        return (
-            self.linear_layer,
-            self.client_module.mlp.fc_in.weight,
-            self.client_module.mlp.fc_in.bias,
-            self.client_module.mlp.fc_out.weight,
-            self.client_module.mlp.fc_out.bias,
-        )
+        return self.linear_layer, \
+                self.client_module.mlp.fc_in.weight, \
+                self.client_module.mlp.fc_in.bias, \
+                self.client_module.mlp.fc_out.weight, \
+                self.client_module.mlp.fc_out.bias
 
     def layerNorm(self):
-        return None, None, self.client_module.ln_1.weight, self.client_module.ln_1.bias
+        return None, \
+               None, \
+               self.client_module.ln_1.weight, \
+               self.client_module.ln_1.bias
 
 
 class MegatronLayerPolicy(DSPolicy):
     _orig_layer_class = None
     version = 0
-    moe_type = "standard"
+    moe_type = 'standard'
 
     def __init__(self, client_module, inference=True):
         super().__init__(inference)
@@ -263,16 +236,13 @@ class MegatronLayerPolicy(DSPolicy):
             else:
                 try:
                     from megatron.model.transformer import ParallelTransformerLayer
-
                     MegatronLayerPolicy._orig_layer_class = ParallelTransformerLayer
                 except ImportError:
                     MegatronLayerPolicy._orig_layer_class = None
 
     def get_hidden_heads(self):
-        return (
-            self.client_module.attention.query_key_value.weight.shape[1],
-            self.client_module.attention.num_attention_heads,
-        )
+        return self.client_module.attention.query_key_value.weight.shape[1], \
+                self.client_module.attention.num_attention_heads
 
     def attention(self):
         if self.inference:
@@ -281,66 +251,53 @@ class MegatronLayerPolicy(DSPolicy):
             else:
                 attention = self.client_module.self_attention
 
-        return (
-            self.linear_layer,
-            attention.query_key_value.weight,
-            attention.query_key_value.bias,
-            attention.dense.weight,
-            attention.dense.bias,
-            self.scale_attention,
-            self.is_megatron_v2,
-        )
+        return self.linear_layer, \
+                attention.query_key_value.weight, \
+                attention.query_key_value.bias, \
+                attention.dense.weight, \
+                attention.dense.bias, \
+                self.scale_attention, \
+                self.is_megatron_v2
 
-    def mlp(self, moe_type="standard"):
+    def mlp(self, moe_type='standard'):
         from deepspeed.moe.utils import has_moe_layers
-
         moe, _ = has_moe_layers(self.client_module)
 
         if moe:
-            moe_experts = (
-                self.client_module.mlp.deepspeed_moe.experts.deepspeed_experts
-                if moe_type == "standard" else
-                self.client_module.mlp.moe.deepspeed_moe.experts.deepspeed_experts)
+            moe_experts = self.client_module.mlp.deepspeed_moe.experts.deepspeed_experts if moe_type == 'standard' else \
+                            self.client_module.mlp.moe.deepspeed_moe.experts.deepspeed_experts
             num_experts = len(moe_experts)
-            if moe_type == "standard":
-                return (
-                    self.linear_layer,
-                    [moe_experts[i].dense_h_to_4h.weight for i in range(num_experts)],
-                    [moe_experts[i].dense_h_to_4h.bias for i in range(num_experts)],
-                    [moe_experts[i].dense_4h_to_h.weight for i in range(num_experts)],
-                    [moe_experts[i].dense_4h_to_h.bias for i in range(num_experts)],
-                )
+            if moe_type == 'standard':
+                return self.linear_layer, \
+                    [moe_experts[i].dense_h_to_4h.weight for i in range(num_experts)], \
+                    [moe_experts[i].dense_h_to_4h.bias for i in range(num_experts)], \
+                    [moe_experts[i].dense_4h_to_h.weight for i in range(num_experts)], \
+                    [moe_experts[i].dense_4h_to_h.bias for i in range(num_experts)]
             else:
 
-                return (
-                    self.linear_layer,
-                    [moe_experts[i].dense_h_to_4h.weight for i in range(num_experts)],
-                    [moe_experts[i].dense_h_to_4h.bias for i in range(num_experts)],
-                    [moe_experts[i].dense_4h_to_h.weight for i in range(num_experts)],
-                    [moe_experts[i].dense_4h_to_h.bias for i in range(num_experts)],
-                    self.client_module.mlp.mlp.dense_h_to_4h.weight,
-                    self.client_module.mlp.mlp.dense_h_to_4h.bias,
-                    self.client_module.mlp.mlp.dense_4h_to_h.weight,
-                    self.client_module.mlp.mlp.dense_4h_to_h.bias,
-                    self.client_module.mlp.coefficient.weight,
-                )
+                return self.linear_layer, \
+                    [moe_experts[i].dense_h_to_4h.weight for i in range(num_experts)], \
+                    [moe_experts[i].dense_h_to_4h.bias for i in range(num_experts)], \
+                    [moe_experts[i].dense_4h_to_h.weight for i in range(num_experts)], \
+                    [moe_experts[i].dense_4h_to_h.bias for i in range(num_experts)], \
+                    self.client_module.mlp.mlp.dense_h_to_4h.weight, \
+                    self.client_module.mlp.mlp.dense_h_to_4h.bias, \
+                    self.client_module.mlp.mlp.dense_4h_to_h.weight, \
+                    self.client_module.mlp.mlp.dense_4h_to_h.bias, \
+                    self.client_module.mlp.coefficient.weight
 
         else:
-            return (
-                self.linear_layer,
-                self.client_module.mlp.dense_h_to_4h.weight,
-                self.client_module.mlp.dense_h_to_4h.bias,
-                self.client_module.mlp.dense_4h_to_h.weight,
-                self.client_module.mlp.dense_4h_to_h.bias,
-            )
+            return self.linear_layer, \
+                self.client_module.mlp.dense_h_to_4h.weight, \
+                self.client_module.mlp.dense_h_to_4h.bias, \
+                self.client_module.mlp.dense_4h_to_h.weight, \
+                self.client_module.mlp.dense_4h_to_h.bias
 
     def layerNorm(self):
-        return (
-            self.client_module.post_attention_layernorm.weight,
-            self.client_module.post_attention_layernorm.bias,
-            self.client_module.input_layernorm.weight,
-            self.client_module.input_layernorm.bias,
-        )
+        return self.client_module.post_attention_layernorm.weight, \
+               self.client_module.post_attention_layernorm.bias, \
+               self.client_module.input_layernorm.weight, \
+               self.client_module.input_layernorm.bias
 
 
 class HFGPT2LayerPolicy(DSPolicy):
@@ -352,42 +309,35 @@ class HFGPT2LayerPolicy(DSPolicy):
         self.client_module = client_module
         try:
             import transformers
-
-            HFGPT2LayerPolicy._orig_layer_class = (
-                transformers.models.gpt2.modeling_gpt2.GPT2Block)
+            HFGPT2LayerPolicy._orig_layer_class = transformers.models.gpt2.modeling_gpt2.GPT2Block
         except:
             HFGPT2LayerPolicy._orig_layer_class = None
 
     def get_hidden_heads(self):
-        return self.client_module.attn.embed_dim, self.client_module.attn.num_heads
+        return self.client_module.attn.embed_dim, \
+                self.client_module.attn.num_heads
 
     def attention(self):
-        return (
-            self.linear_layer,
-            self.client_module.attn.c_attn.weight,
-            self.client_module.attn.c_attn.bias,
-            self.client_module.attn.c_proj.weight,
-            self.client_module.attn.c_proj.bias,
-            self.scale_attention,
-            self.is_megatron_v2,
-        )
+        return self.linear_layer, \
+                self.client_module.attn.c_attn.weight, \
+                self.client_module.attn.c_attn.bias, \
+                self.client_module.attn.c_proj.weight, \
+                self.client_module.attn.c_proj.bias, \
+                self.scale_attention, \
+                self.is_megatron_v2
 
     def mlp(self):
-        return (
-            self.linear_layer,
-            self.client_module.mlp.c_fc.weight,
-            self.client_module.mlp.c_fc.bias,
-            self.client_module.mlp.c_proj.weight,
-            self.client_module.mlp.c_proj.bias,
-        )
+        return self.linear_layer, \
+            self.client_module.mlp.c_fc.weight, \
+            self.client_module.mlp.c_fc.bias, \
+            self.client_module.mlp.c_proj.weight, \
+            self.client_module.mlp.c_proj.bias
 
     def layerNorm(self):
-        return (
-            self.client_module.ln_2.weight,
-            self.client_module.ln_2.bias,
-            self.client_module.ln_1.weight,
-            self.client_module.ln_1.bias,
-        )
+        return self.client_module.ln_2.weight, \
+               self.client_module.ln_2.bias, \
+               self.client_module.ln_1.weight, \
+               self.client_module.ln_1.bias
 
 
 class BLOOMLayerPolicy(DSPolicy):
@@ -398,9 +348,7 @@ class BLOOMLayerPolicy(DSPolicy):
         self.client_module = client_module
         try:
             import transformers
-
-            BLOOMLayerPolicy._orig_layer_class = (
-                transformers.models.bloom.modeling_bloom.BloomBlock)
+            BLOOMLayerPolicy._orig_layer_class = transformers.models.bloom.modeling_bloom.BloomBlock
             global supported_models
             supported_models.update(
                 {transformers.models.bloom.modeling_bloom.BloomModel})
@@ -408,54 +356,44 @@ class BLOOMLayerPolicy(DSPolicy):
             BLOOMLayerPolicy._orig_layer_class = None
 
     def get_hidden_heads(self):
-        return (
-            self.client_module.self_attention.hidden_size,
-            self.client_module.self_attention.num_heads,
-        )
+        return self.client_module.self_attention.hidden_size, \
+                self.client_module.self_attention.num_heads
 
     def attention(self):
-        return (
-            self.linear_layer,
-            self.client_module.self_attention.query_key_value.weight,
-            self.client_module.self_attention.query_key_value.bias,
-            self.client_module.self_attention.dense.weight,
-            self.client_module.self_attention.dense.bias,
-            self.scale_attention,
-            self.is_megatron_v2,
-        )
+        return self.linear_layer, \
+                self.client_module.self_attention.query_key_value.weight, \
+                self.client_module.self_attention.query_key_value.bias, \
+                self.client_module.self_attention.dense.weight, \
+                self.client_module.self_attention.dense.bias, \
+                self.scale_attention, \
+                self.is_megatron_v2
 
     def mlp(self):
-        return (
-            self.linear_layer,
-            self.client_module.mlp.dense_h_to_4h.weight,
-            self.client_module.mlp.dense_h_to_4h.bias,
-            self.client_module.mlp.dense_4h_to_h.weight,
-            self.client_module.mlp.dense_4h_to_h.bias,
-        )
+        return self.linear_layer, \
+            self.client_module.mlp.dense_h_to_4h.weight, \
+            self.client_module.mlp.dense_h_to_4h.bias, \
+            self.client_module.mlp.dense_4h_to_h.weight, \
+            self.client_module.mlp.dense_4h_to_h.bias
 
     def layerNorm(self):
-        return (
-            self.client_module.post_attention_layernorm.weight,
-            self.client_module.post_attention_layernorm.bias,
-            self.client_module.input_layernorm.weight,
-            self.client_module.input_layernorm.bias,
-        )
+        return self.client_module.post_attention_layernorm.weight, \
+               self.client_module.post_attention_layernorm.bias, \
+               self.client_module.input_layernorm.weight, \
+               self.client_module.input_layernorm.bias
 
     def get_param_names(self):
-        return (
-            "self_attention.query_key_value.weight",
-            "self_attention.query_key_value.bias",
-            "self_attention.dense.weight",
-            "self_attention.dense.bias",
-            "mlp.dense_h_to_4h.weight",
-            "mlp.dense_h_to_4h.bias",
-            "mlp.dense_4h_to_h.weight",
-            "mlp.dense_4h_to_h.bias",
-            "input_layernorm.weight",
-            "input_layernorm.bias",
-            "post_attention_layernorm.weight",
-            "post_attention_layernorm.bias",
-        )
+        return 'self_attention.query_key_value.weight', \
+               'self_attention.query_key_value.bias', \
+               'self_attention.dense.weight', \
+               'self_attention.dense.bias', \
+               'mlp.dense_h_to_4h.weight', \
+               'mlp.dense_h_to_4h.bias', \
+               'mlp.dense_4h_to_h.weight', \
+               'mlp.dense_4h_to_h.bias', \
+               'input_layernorm.weight', \
+               'input_layernorm.bias', \
+               'post_attention_layernorm.weight', \
+               'post_attention_layernorm.bias',
 
 
 class GPTNEOXLayerPolicy(DSPolicy):
@@ -471,7 +409,6 @@ class GPTNEOXLayerPolicy(DSPolicy):
             else:
                 try:
                     from transformers import GPTNeoXLayer
-
                     GPTNEOXLayerPolicy._orig_layer_class = GPTNeoXLayer
                 except ImportError:
                     GPTNEOXLayerPolicy._orig_layer_class = None
@@ -482,10 +419,8 @@ class GPTNEOXLayerPolicy(DSPolicy):
         else:
             attention = self.client_module.self_attention
 
-        return (
-            self.client_module.attention.query_key_value.weight.shape[1],
-            self.client_module.attention.num_attention_heads,
-        )
+        return self.client_module.attention.query_key_value.weight.shape[1], \
+                self.client_module.attention.num_attention_heads
 
     def attention(self):
         if GPTNEOXLayerPolicy.version == 0:
@@ -493,79 +428,63 @@ class GPTNEOXLayerPolicy(DSPolicy):
         else:
             attention = self.client_module.self_attention
 
-        return (
-            self.linear_layer,
-            attention.query_key_value.weight,
-            attention.query_key_value.bias,
-            attention.dense.weight,
-            attention.dense.bias,
-            self.scale_attention,
-            self.is_megatron_v2,
-        )
+        return self.linear_layer, \
+                attention.query_key_value.weight, \
+                attention.query_key_value.bias, \
+                attention.dense.weight, \
+                attention.dense.bias, \
+                self.scale_attention, \
+                self.is_megatron_v2
 
     def mlp(self):
-        return (
-            self.linear_layer,
-            self.client_module.mlp.dense_h_to_4h.weight,
-            self.client_module.mlp.dense_h_to_4h.bias,
-            self.client_module.mlp.dense_4h_to_h.weight,
-            self.client_module.mlp.dense_4h_to_h.bias,
-        )
+        return self.linear_layer, \
+            self.client_module.mlp.dense_h_to_4h.weight, \
+            self.client_module.mlp.dense_h_to_4h.bias, \
+            self.client_module.mlp.dense_4h_to_h.weight, \
+            self.client_module.mlp.dense_4h_to_h.bias
 
     def layerNorm(self):
-        return (
-            self.client_module.post_attention_layernorm.weight,
-            self.client_module.post_attention_layernorm.bias,
-            self.client_module.input_layernorm.weight,
-            self.client_module.input_layernorm.bias,
-        )
+        return self.client_module.post_attention_layernorm.weight, \
+               self.client_module.post_attention_layernorm.bias, \
+               self.client_module.input_layernorm.weight, \
+               self.client_module.input_layernorm.bias
 
     def get_param_names(self):
-        return (
-            "attention.query_key_value.weight",
-            "attention.query_key_value.bias",
-            "attention.dense.weight",
-            "attention.dense.bias",
-            "mlp.dense_h_to_4h.weight",
-            "mlp.dense_h_to_4h.bias",
-            "mlp.dense_4h_to_h.weight",
-            "mlp.dense_4h_to_h.bias",
-            "input_layernorm.weight",
-            "input_layernorm.bias",
-            "post_attention_layernorm.weight",
-            "post_attention_layernorm.bias",
-        )
+        return 'attention.query_key_value.weight', \
+               'attention.query_key_value.bias', \
+               'attention.dense.weight', \
+               'attention.dense.bias', \
+               'mlp.dense_h_to_4h.weight', \
+               'mlp.dense_h_to_4h.bias', \
+               'mlp.dense_4h_to_h.weight', \
+               'mlp.dense_4h_to_h.bias', \
+               'input_layernorm.weight', \
+               'input_layernorm.bias', \
+               'post_attention_layernorm.weight', \
+               'post_attention_layernorm.bias',
 
 
 class HFOPTLayerPolicy(DSPolicy):
     _orig_layer_class = None
 
     def __init__(self, client_module, inference=True):
-        super().__init__(
-            inference,
-            linear_layer=True,
-            mlp_act_func_type=ActivationFuncType.ReLU,
-            pre_attn_norm=True,
-        )
+        super().__init__(inference,
+                         linear_layer=True,
+                         mlp_act_func_type=ActivationFuncType.ReLU,
+                         pre_attn_norm=True)
         self.client_module = client_module
         try:
             import transformers
-
-            HFOPTLayerPolicy._orig_layer_class = (
-                transformers.models.opt.modeling_opt.OPTDecoderLayer)
-            if isinstance(
-                    DSPolicy.hf_model_config,
-                    transformers.models.opt.configuration_opt.OPTConfig,
-            ):
+            HFOPTLayerPolicy._orig_layer_class = transformers.models.opt.modeling_opt.OPTDecoderLayer
+            if isinstance(DSPolicy.hf_model_config,
+                          transformers.models.opt.configuration_opt.OPTConfig):
                 self.pre_attn_norm = self.hf_model_config.do_layer_norm_before
         except:
             HFOPTLayerPolicy._orig_layer_class = None
 
     def get_hidden_heads(self):
-        return (
-            self.client_module.self_attn.embed_dim,
-            self.client_module.self_attn.num_heads,
-        )
+        return self.client_module.self_attn.embed_dim, \
+                self.client_module.self_attn.num_heads
 
     def attention(self):
         qw = self.client_module.self_attn.q_proj.weight
@@ -580,32 +499,26 @@ class HFOPTLayerPolicy(DSPolicy):
         qkvw = Parameter(torch.cat((qw, kw, vw), dim=0), requires_grad=False)
         qkvb = Parameter(torch.cat((qb, kb, vb), dim=0), requires_grad=False)
 
-        return (
-            self.linear_layer,
-            qkvw,
-            qkvb,
-            self.client_module.self_attn.out_proj.weight,
-            self.client_module.self_attn.out_proj.bias,
-            self.scale_attention,
-            self.is_megatron_v2,
-        )
+        return self.linear_layer, \
+            qkvw, \
+            qkvb, \
+            self.client_module.self_attn.out_proj.weight, \
+            self.client_module.self_attn.out_proj.bias, \
+            self.scale_attention, \
+            self.is_megatron_v2
 
     def mlp(self):
-        return (
-            self.linear_layer,
-            self.client_module.fc1.weight,
-            self.client_module.fc1.bias,
-            self.client_module.fc2.weight,
-            self.client_module.fc2.bias,
-        )
+        return self.linear_layer, \
+            self.client_module.fc1.weight, \
+            self.client_module.fc1.bias, \
+            self.client_module.fc2.weight, \
+            self.client_module.fc2.bias
 
     def layerNorm(self):
-        return (
-            self.client_module.final_layer_norm.weight,
-            self.client_module.final_layer_norm.bias,
-            self.client_module.self_attn_layer_norm.weight,
-            self.client_module.self_attn_layer_norm.bias,
-        )
+        return self.client_module.final_layer_norm.weight, \
+            self.client_module.final_layer_norm.bias, \
+            self.client_module.self_attn_layer_norm.weight, \
+            self.client_module.self_attn_layer_norm.bias
 
 
 class HFDistilBertLayerPolicy(DSPolicy):
@@ -619,7 +532,6 @@ class HFDistilBertLayerPolicy(DSPolicy):
         if HFDistilBertLayerPolicy._orig_layer_class is None:
             try:
                 import transformers
-
                 HFDistilBertLayerPolicy._orig_layer_class = [
                     transformers.models.distilbert.modeling_distilbert.TransformerBlock,
                 ]
@@ -627,10 +539,8 @@ class HFDistilBertLayerPolicy(DSPolicy):
                 HFDistilBertLayerPolicy._orig_layer_class = None
 
     def get_hidden_heads(self):
-        return (
-            self.client_module.attention.q_lin.weight.shape[1],
-            self.client_module.attention.n_heads,
-        )
+        return self.client_module.attention.q_lin.weight.shape[1], \
+                self.client_module.attention.n_heads
 
     def attention(self):
         qw = self.client_module.attention.q_lin.weight
@@ -643,36 +553,28 @@ class HFDistilBertLayerPolicy(DSPolicy):
         qkvw = Parameter(torch.cat((qw, kw, vw), dim=0))
         qkvb = Parameter(torch.cat((qb, kb, vb), dim=0))
 
-        return (
-            self.linear_layer,
-            qkvw,
-            qkvb,
-            self.client_module.attention.out_lin.weight,
-            self.client_module.attention.out_lin.bias,
-            self.scale_attention,
-            False,
-        )
+        return self.linear_layer, \
+               qkvw, \
+               qkvb, \
+               self.client_module.attention.out_lin.weight, \
+               self.client_module.attention.out_lin.bias, \
+               self.scale_attention, \
+               False
 
     def mlp(self):
         intermediate_ff = self.client_module.ffn.lin1
 
-        return (
-            self.linear_layer,
-            intermediate_ff.weight,
-            intermediate_ff.bias,
-            self.client_module.ffn.lin2.weight,
-            self.client_module.ffn.lin2.bias,
-        )
+        return self.linear_layer, intermediate_ff.weight, intermediate_ff.bias, \
+            self.client_module.ffn.lin2.weight, \
+            self.client_module.ffn.lin2.bias
 
     def layerNorm(self):
         attention_layernorm = self.client_module.sa_layer_norm
         transformer_layernorm = self.client_module.output_layer_norm
-        return (
-            attention_layernorm.weight,
-            attention_layernorm.bias,
-            transformer_layernorm.weight,
-            transformer_layernorm.bias,
-        )
+        return attention_layernorm.weight, \
+               attention_layernorm.bias, \
+               transformer_layernorm.weight, \
+               transformer_layernorm.bias
 
 
 replace_policies = [
