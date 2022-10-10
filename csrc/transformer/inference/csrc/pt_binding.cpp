@@ -1656,6 +1656,7 @@ void TransformerEncoder(at::Tensor& input,
                      Context::Instance().GetCurrentStream());
         } else {
             assert(q_bits == 4);
+            std::cout << "attn_akvw" << std::endl;
             run_quantize_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                               (__half*)(preln ? buf_0 : input_ptr),
@@ -1796,6 +1797,7 @@ void TransformerEncoder(at::Tensor& input,
                      Context::Instance().GetCurrentStream());
         } else {
             assert(q_bits == 4);
+            std::cout << "attn_ow" << std::endl;
             run_quantize_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                               (__half*)buf_2,
@@ -1840,7 +1842,7 @@ void TransformerEncoder(at::Tensor& input,
                                    new_stream);
     if (q_int) {
         int out_size = mlp_weights[0].size(0);
-        if (q_bits == 8) {
+        if (q_bits == 8 or q_bits == 4) {
             launch_me((int8_t*)aux_buff,
                       (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                       (__half*)buf_4,

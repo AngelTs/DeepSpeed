@@ -176,7 +176,6 @@ class GroupQuantizer:
 
     def quantize(self, inputs, qkv=True, parallel_dim=0, force_int8=False):
         if not self.q_int or not qkv:
-            print(self.q_int, qkv)
             inputs = torch.nn.Parameter(inputs, requires_grad=False)
             inputs.scale = torch.empty(1)
             return inputs
@@ -195,6 +194,7 @@ class GroupQuantizer:
         if num_bits == 4:
             inputs_q = packInt4(inputs_q)
         out = torch.nn.Parameter(inputs_q, requires_grad=False)
+        # out.scale = scale
         inputs_split = inputs.split(inputs.shape[parallel_dim] // 2, dim=parallel_dim)
         input_flat = [
             inputs_split[i].reshape(self.num_groups,
@@ -221,7 +221,7 @@ class GroupQuantizer:
                                scale1[1]],
                               dim=0).reshape(self.num_groups,
                                              -1).contiguous()
-        print(f"inputs.shape = {inputs.shape}, out.shape: {out.shape}, out.scale.shape: {out.scale.shape}")
+        # print(f"inputs.shape = {inputs.shape}, out.shape: {out.shape}, out.scale.shape: {out.scale.shape}")
         return out
 
 
@@ -616,17 +616,14 @@ def replace_transformer_layer(orig_layer_impl,
                     attn_block.attn_qkvw,
                     qkvw,
                     q_int=enable_qkv_quantization),
-                                                          qkv=enable_qkv_quantization)
+                                                          qkv=enable_qkv_quantization, force_int8=False)
                 attn_block.attn_qkvb = \
                     mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
-                print(f"quantizer.num_bits = {quantizer.num_bits}")
-                print(f"attn_block.attn_ow {attn_block.attn_ow.shape}")
-                print(f"dense_w = {dense_w.shape})")
                 attn_block.attn_ow = quantizer.quantize(
                     mp_replace.copy(attn_block.attn_ow,
                                     dense_w,
-                                    q_int=quantize))
+                                    q_int=quantize), force_int8=False)
 
                 attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
 
@@ -685,12 +682,12 @@ def replace_transformer_layer(orig_layer_impl,
                     mpl_block.inter_w = quantizer.quantize(
                         mp_replace.copy(mpl_block.inter_w,
                                         _h4h_w,
-                                        q_int=quantize))
+                                        q_int=quantize), force_int8=True)
                     mpl_block.inter_b = mp_replace.copy(mpl_block.inter_b, _h4h_b)
                     mpl_block.output_w = quantizer.quantize(
                         mp_replace.copy(mpl_block.output_w,
                                         _4hh_w,
-                                        q_int=quantize))
+                                        q_int=quantize), force_int8=True)
                     mpl_block.output_b = mp_replace.copy(mpl_block.output_b, _4hh_b)
 
                 if attn_nw is None:

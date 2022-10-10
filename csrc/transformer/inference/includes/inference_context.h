@@ -124,7 +124,7 @@ public:
                    workSpaceSize,
                    _free_memory_size,
                    total_size);
-            throw std::runtime_error("Workspace is null.");
+            throw std::runtime_error("Workspace is nullx.");
         }
         _workSpaceSize = workSpaceSize;
     }
