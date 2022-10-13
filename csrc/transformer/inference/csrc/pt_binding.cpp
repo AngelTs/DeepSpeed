@@ -937,7 +937,7 @@ at::Tensor ds_vector_matmul(at::Tensor& input,
                        .layout(at::kStrided)
                        .device(at::kCUDA)
                        .requires_grad(false);
-    int out_size = q_int8 ? weight.size(0) : weight.size(1);
+    int out_size = q_int ? weight.size(0) : weight.size(1);
     T* workspace = (T*)Context::Instance().GetWorkSpace() +
                    (5 * input.size(0) * Context::Instance().GetMaxTokenLenght() * out_size);
 
@@ -1057,7 +1057,6 @@ void mlp_unfused_cublas(T* output,
                         bool mlp_after_attn,
                         at::Tensor& q_scale,
                         at::Tensor& q_scale1,
-                        bool q_int8,
                         bool q_int,
                         unsigned q_bits,
                         ActivationFuncType act_func_type)
@@ -1748,7 +1747,7 @@ void TransformerEncoder(at::Tensor& input,
                           new_stream);
     if (q_int and enable_qkv_quantization) {
         int out_size = attn_weights[0].size(0);
-        if (q_bits == 8) {
+        if (q_bits == 8 or q_bits == 4) {
             launch_act_quant((int8_t*)aux_buff,
                             (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                             (__half*)(preln ? buf_0 : input_ptr),
@@ -1889,7 +1888,7 @@ void TransformerEncoder(at::Tensor& input,
         buf_2, buf_0, bsz, num_heads, _seq_length, hidden_dim, new_stream, 1);
     if (q_int) {
         int out_size = attn_weights[1].size(0);
-        if (q_bits == 8) {
+        if (q_bits == 8 or q_bits == 4) {
             launch_act_quant((int8_t*)aux_buff,
                             (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                             (__half*)buf_2,
