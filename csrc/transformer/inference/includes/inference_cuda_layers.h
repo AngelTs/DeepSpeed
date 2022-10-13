@@ -4,15 +4,7 @@ Copyright 2022 The Microsoft DeepSpeed Team
 
 #pragma once
 
-#ifdef __HIP_PLATFORM_HCC__
-#define HALF_PRECISION_AVAILABLE = 1
-#include <hip/hip_cooperative_groups.h>
-#else
-#if __CUDA_ARCH__ >= 530
-#define HALF_PRECISION_AVAILABLE = 1
-#endif
-#include <cooperative_groups.h>
-#endif
+#include "ds_kernel_utils.h"
 
 #include <cuda.h>
 #include <cuda_fp16.h>
@@ -103,6 +95,43 @@ void launch_residual_layer_norm(T* norm,
                                 bool preLN,
                                 bool mlp_after_attn,
                                 cudaStream_t stream);
+
+template <typename T>
+void launch_fused_ln(T* output,
+                     const T* vals,
+                     const T* gamma,
+                     const T* beta,
+                     float epsilon,
+                     int rows,
+                     int elems_per_row,
+                     cudaStream_t stream);
+
+template <typename T>
+void launch_fused_residual_ln(T* output,
+                              const T* vals,
+                              const T* residual,
+                              const T* bias,
+                              const T* gamma,
+                              const T* beta,
+                              float epsilon,
+                              int rows,
+                              int elems_per_row,
+                              cudaStream_t stream);
+
+template <typename T>
+void launch_fused_residual_ln(int8_t* out_int8,
+                              T* output,
+                              float* scales,
+                              const T* vals,
+                              const T* residual,
+                              const T* bias,
+                              const T* gamma,
+                              const T* beta,
+                              float epsilon,
+                              int rows,
+                              int elems_per_row,
+                              cudaStream_t stream);
+
 template <typename T>
 void launch_dequantize(T* output,
                        const int8_t* input,
@@ -365,3 +394,28 @@ void launch_bias_residual1(T* input,
                            int intermediate_size,
                            bool preln,
                            cudaStream_t stream);
+
+void launch_act_quant(int8_t* output_data,
+                      float* scales,
+                      const __half* input_data,
+                      int groups,
+                      int elems_per_group,
+                      cudaStream_t stream);
+
+void launch_gelu_quant(int8_t* output_data,
+                       float* scales,
+                       const __half* input_data,
+                       const __half* bias_data,
+                       int groups,
+                       int elems_per_group,
+                       cudaStream_t stream);
+
+void launch_gelu_quant(int8_t* output_data,
+                       float* scales,
+                       const __half* input_data,
+                       const __half* gamma,
+                       const __half* beta,
+                       float epsilon,
+                       int groups,
+                       int elems_per_group,
+                       cudaStream_t stream);

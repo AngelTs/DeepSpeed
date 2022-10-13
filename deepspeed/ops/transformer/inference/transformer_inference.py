@@ -224,28 +224,26 @@ class DeepSpeedSelfAttentionFunction(Function):
                     config.q_bits,
                 )
             else:
-                qkv_out = qkv_func(
-                    input,
-                    attn_qkvw,
-                    attn_qkvw.scale,
-                    (attn_qkvb if attn_qkvb is not None else norm_b),
-                    norm_w,
-                    norm_b,
-                    config.epsilon,
-                    (attn_qkvb is not None),
-                    DeepSpeedTransformerInference.layer_id,
-                    config.mp_size,
-                    dist.get_rank() if dist.is_initialized() else 0,
-                    config.enable_qkv_quantization,
-                    config.q_bits,
-                )
-            context_layer, key_layer, value_layer = compute_attention(
-                qkv_out[0] if isinstance(qkv_out, list) else qkv_out, input_mask
-            )
+                qkv_out = qkv_func(input,
+                                   attn_qkvw,
+                                   attn_qkvw.scale,
+                                   (attn_qkvb if attn_qkvb is not None else norm_b),
+                                   norm_w,
+                                   norm_b,
+                                   config.epsilon,
+                                   (attn_qkvb is not None),
+                                   DeepSpeedTransformerInference.layer_id,
+                                   False,
+                                   config.mp_size,
+                                   dist.get_rank() if dist.is_initialized() else 0,
+                                   config.enable_qkv_quantization)
+            context_layer, key_layer, value_layer = compute_attention(qkv_out[0] if isinstance(qkv_out, list) else qkv_out, input_mask)
 
-            output = vector_matmul_func(
-                context_layer, attn_ow, False, attn_ow.scale, config.q_int, config.q_int
-            )
+            output = vector_matmul_func(context_layer,
+                                        attn_ow,
+                                        False,
+                                        attn_ow.scale,
+                                        config.q_int8)
 
             return output, key_layer, value_layer, context_layer, qkv_out[-1]
 
