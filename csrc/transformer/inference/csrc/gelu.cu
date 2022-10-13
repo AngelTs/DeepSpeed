@@ -2,6 +2,7 @@
 Copyright 2022 The Microsoft DeepSpeed Team
 */
 
+#include "conversion_utils.h"
 #include "inference_cuda_layers.h"
 #include "memory_access_utils.h"
 
@@ -16,58 +17,29 @@ inline __device__ float gelu(const float x)
     return x * 0.5f * (1.0f + tanhf(sqrt_param * (x + mul_param * x * x * x)));
 }
 
-__global__ void fused_bias_gelu(float* input,
-                                const float* bias,
-                                int total_count,
-                                int intermediate_size)
+template <typename T>
+__global__ void fused_bias_gelu(T* input, const T* bias, int total_count, int intermediate_size)
 {
     // Input restriction: intermediate_size % vals_per_access == 0
     constexpr int granularity = 16;
-    constexpr int vals_per_access = granularity / sizeof(float);
-    const int offset = (blockIdx.x * blockDim.x + threadIdx.x) * vals_per_access;
+    constexpr int values_per_access = granularity / sizeof(T);
+    const int offset = (blockIdx.x * blockDim.x + threadIdx.x) * values_per_access;
 
     if (offset < total_count) {
-        float data[vals_per_access];
-        float data_bias[vals_per_access];
+        T data[values_per_access];
+        T data_bias[values_per_access];
         mem_access::load_global<granularity>(data, input + offset);
         mem_access::load_global<granularity>(data_bias, bias + (offset % intermediate_size));
 
 #pragma unroll
-        for (int i = 0; i < vals_per_access; i++) { data[i] = gelu(data[i] + data_bias[i]); }
-
-        mem_access::store_global<granularity>(input + offset, data);
-    }
-}
-
-__global__ void fused_bias_gelu(__half* input,
-                                const __half* bias,
-                                int total_count,
-                                int intermediate_size)
-{
-    // Input restriction: intermediate_size % vals_per_access == 0
-    // This kernel doubles the per-thread ALU workload as compared to the float implementation
-#ifdef HALF_PRECISION_AVAILABLE
-    constexpr int granularity = 16;
-    constexpr int vals_per_access = granularity / sizeof(__half);
-    int offset = (blockIdx.x * blockDim.x + threadIdx.x) * vals_per_access;
-
-    if (offset < total_count) {
-        // Divide by 2 since we store two values per __half2
-        __half2 data[vals_per_access / 2];
-        __half2 bias_data[vals_per_access / 2];
-        mem_access::load_global<granularity>(data, input + offset);
-        mem_access::load_global<granularity>(bias_data, bias + (offset % intermediate_size));
-
-#pragma unroll
-        for (int i = 0; i < vals_per_access / 2; i++) {
-            float2 data_f = __half22float2(data[i]);
-            float2 bias_f = __half22float2(bias_data[i]);
-            data[i] = __floats2half2_rn(gelu(data_f.x + bias_f.x), gelu(data_f.y + bias_f.y));
+        for (int i = 0; i < values_per_access; i++) {
+            float data_f = conversion::to<float>(data[i]);
+            float bias_f = conversion::to<float>(data_bias[i]);
+            data[i] = conversion::to<T>(gelu(data_f + bias_f));
         }
 
         mem_access::store_global<granularity>(input + offset, data);
     }
-#endif
 }
 
 template <typename T>
@@ -548,10 +520,10 @@ __device__ void quantize_kernel_glue(float2* data,
         int8_t* q_data_8 = reinterpret_cast<int8_t*>(&q_data_int);
         __half* data_h = reinterpret_cast<__half*>(&data[i]);
         int32_t data_f[4];
-        data_f[0] = round((float)data_h[0] * q_scale);
-        data_f[1] = round((float)data_h[1] * q_scale);
-        data_f[2] = round((float)data_h[2] * q_scale);
-        data_f[3] = round((float)data_h[3] * q_scale);
+        data_f[0] = rintf((float)data_h[0] * q_scale);
+        data_f[1] = rintf((float)data_h[1] * q_scale);
+        data_f[2] = rintf((float)data_h[2] * q_scale);
+        data_f[3] = rintf((float)data_h[3] * q_scale);
         q_data_8[0] = data_f[0] > 127 ? 127 : (data_f[0] < -128 ? -128 : data_f[0]);
         q_data_8[1] = data_f[1] > 127 ? 127 : (data_f[1] < -128 ? -128 : data_f[1]);
         q_data_8[2] = data_f[2] > 127 ? 127 : (data_f[2] < -128 ? -128 : data_f[2]);

@@ -25,25 +25,71 @@ class DeepSpeedEncoderFunction(Function):
                 input_norm,
                 config,
                 func,
-                norm_factor):
-        func(input,
-             mask,
-             input_norm,
-             attn_weights,
-             attn_biases,
-             attn_norm,
-             mlp_weights,
-             mlp_biases,
-             config.heads,
-             config.pre_layer_norm,
-             config.epsilon,
-             norm_factor,
-             config.q_int8,
-             mlp_weights[1].scale,
-             mlp_weights[0].scale,
-             attn_weights[1].scale,
-             config.enable_qkv_quantization,
-             attn_weights[0].scale)
+                qkv_func,
+                mlp_func,
+                norm_factor,
+                flash_attn_func):
+        if flash_attn_func is not None and input.shape[-2] % 128 == 0:
+            (qkv,
+             ) = qkv_func(input,
+                          input_norm,
+                          attn_weights[0],
+                          attn_biases[0],
+                          config.heads,
+                          config.pre_layer_norm,
+                          config.enable_qkv_quantization,
+                          attn_weights[0].scale,
+                          config.epsilon,
+                          config.layer_id)
+            BATCH = input.size(0)
+            N_CTX = input.size(1)
+
+            context_layer = flash_attn_func(
+                qkv,
+                mask,
+                torch.empty(1),
+                N_CTX,
+                0.0, #  dropout
+                return_attn_probs=False,
+                causal=False
+            )
+            mlp_func(input,
+                     context_layer.view(BATCH,
+                                        N_CTX,
+                                        input.shape[-1]),
+                     attn_weights[1],
+                     attn_biases[1],
+                     attn_norm,
+                     mlp_weights,
+                     mlp_biases,
+                     input_norm,
+                     config.heads,
+                     config.pre_layer_norm,
+                     config.epsilon,
+                     config.q_int8,
+                     config.enable_qkv_quantization,
+                     mlp_weights[1].scale,
+                     mlp_weights[0].scale,
+                     attn_weights[1].scale)
+        else:
+            func(input,
+                 mask,
+                 input_norm,
+                 attn_weights,
+                 attn_biases,
+                 attn_norm,
+                 mlp_weights,
+                 mlp_biases,
+                 config.heads,
+                 config.pre_layer_norm,
+                 config.epsilon,
+                 norm_factor,
+                 config.q_int8,
+                 mlp_weights[1].scale,
+                 mlp_weights[0].scale,
+                 attn_weights[1].scale,
+                 config.enable_qkv_quantization,
+                 attn_weights[0].scale)
         if config.return_tuple:
             return (input, )
         else:
@@ -92,7 +138,8 @@ class DeepSpeedEncoder(nn.Module):
             builder = op_builder.InferenceBuilder()
             inference_cuda_module = builder.load()
 
-        print("DeepSpeed ENCODER config is ", self.config.__dict__)
+        if self.config.layer_id == 0:
+            print("DeepSpeed ENCODER config is ", self.config.__dict__)
 
         self.attention = DeepSpeedSelfAttention(self.config,
                                                 mp_group,
@@ -120,6 +167,16 @@ class DeepSpeedEncoder(nn.Module):
         self.encoder_func = inference_cuda_module.encoder_fp16 if config.fp16 or config.q_int8 else \
                                     inference_cuda_module.encoder_fp32
         self.attention.norm_factor = (1 / self.attention.norm_factor)**2
+        self.qkv_func = inference_cuda_module.encoder_qkv_fp16 if config.fp16 or config.q_int8 else \
+                                    inference_cuda_module.encoder_qkv_fp32
+        self.mlp_func = inference_cuda_module.encoder_mlp_fp16 if config.fp16 or config.q_int8 else \
+                                    inference_cuda_module.encoder_mlp_fp32
+
+        try:
+            from flash_attn.flash_attn_interface import flash_attn_unpadded_qkvpacked_func
+            self.flash_attn_func = flash_attn_unpadded_qkvpacked_func
+        except:
+            self.flash_attn_func = None
 
     def forward(self,
                 input=None,
@@ -158,4 +215,7 @@ class DeepSpeedEncoder(nn.Module):
              self.norm_b],
             self.config,
             self.encoder_func,
-            self.attention.norm_factor)
+            self.qkv_func,
+            self.mlp_func,
+            self.attention.norm_factor,
+            self.flash_attn_func)

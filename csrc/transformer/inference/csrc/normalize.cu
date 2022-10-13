@@ -11,7 +11,10 @@ Copyright 2022 The Microsoft DeepSpeed Team
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include "layer_norm_utils.h"
+#include "memory_access_utils.h"
 
+#include "conversion_utils.h"
 #define NORM_REG (MAX_REGISTERS)
 
 namespace cg = cooperative_groups;
@@ -1365,3 +1368,670 @@ void launch_residual_layer_norm1<__half>(__half* norm,
     fused_residual_layer_norm1<<<grid_dim, block_dim, 0, stream>>>(
         norm, vals, residual, bias, gamma, beta, epsilon, hidden_dim / 2);
 }
+
+template <typename T, int UNROLL>
+__global__ void fused_ln(T* output,
+                         const T* vals,
+                         const T* gamma,
+                         const T* beta,
+                         float epsilon,
+                         int elems_per_row)
+{
+    constexpr int T_per_load = ln::granularity / sizeof(T);
+
+    cg::thread_block tb = cg::this_thread_block();
+    cg::thread_block_tile<hw_warp_size> warp = cg::tiled_partition<hw_warp_size>(tb);
+
+    __shared__ float sum_buffer[ln::max_warps];
+    __shared__ float var_buffer[ln::max_warps];
+
+    // X-dimension of the block
+    const int block_offset = tb.group_index().x * elems_per_row;
+    const int thread_offset = tb.thread_index().x * T_per_load;
+    const int base_offset = block_offset + thread_offset;
+    const int stride = tb.size() * T_per_load;
+
+    float partial_sum = 0.f;
+
+    const T* input_base = vals + base_offset;
+    T local_buffer[UNROLL * ln::internal_unroll * T_per_load];
+
+#pragma unroll
+    for (int i = 0; i < UNROLL; i++) {
+        T* iteration_buffer = local_buffer + i * ln::internal_unroll * T_per_load;
+
+#pragma unroll
+        for (int j = 0; j < ln::internal_unroll; j++) {
+            const int iteration = i * ln::internal_unroll + j;
+            mem_access::load_global<ln::granularity>(
+                iteration_buffer + j * T_per_load,
+                input_base + iteration * stride,
+                thread_offset + iteration * stride < elems_per_row);
+        }
+
+#pragma unroll
+        for (int j = 0; j < ln::internal_unroll * T_per_load; j++) {
+            partial_sum += conversion::to<float>(iteration_buffer[j]);
+        }
+    }
+
+    const float sum = ln_sum_reduce<ln::max_warps>(tb, warp, sum_buffer, partial_sum);
+    const float mean = sum / elems_per_row;
+
+    float partial_mean_diff = 0.f;
+
+#pragma unroll
+    for (int i = 0; i < UNROLL * ln::internal_unroll; i++) {
+#pragma unroll
+        for (int j = 0; j < T_per_load; j++) {
+            // Using a 0 value here skews the variance, have to if-guard
+            if (thread_offset + i * stride < elems_per_row) {
+                float diff = (conversion::to<float>(local_buffer[i * T_per_load + j]) - mean);
+                partial_mean_diff += diff * diff;
+            }
+        }
+    }
+
+    const float mean_diff = ln_sum_reduce<ln::max_warps>(tb, warp, var_buffer, partial_mean_diff);
+    const float variance = mean_diff / elems_per_row;
+    const float denom = __frsqrt_rn(variance + epsilon);
+
+    const T mean_compute = conversion::to<T>(mean);
+    const T denom_compute = conversion::to<T>(denom);
+
+    T* block_output = output + block_offset;
+
+#pragma unroll
+    for (int i = 0; i < UNROLL * ln::internal_unroll; i++) {
+        T* iteration_buffer = local_buffer + i * T_per_load;
+        const int iter_idx = i * stride + thread_offset;
+        const bool do_loads = iter_idx < elems_per_row;
+
+        T gamma_local[T_per_load], beta_local[T_per_load];
+
+        mem_access::load_global<ln::granularity>(gamma_local, gamma + iter_idx, do_loads);
+        mem_access::load_global<ln::granularity>(beta_local, beta + iter_idx, do_loads);
+
+#pragma unroll
+        for (int j = 0; j < T_per_load; j++) {
+            iteration_buffer[j] = (iteration_buffer[j] - mean_compute) * denom_compute;
+            iteration_buffer[j] = iteration_buffer[j] * gamma_local[j] + beta_local[j];
+        }
+
+        if (do_loads) {
+            mem_access::store_global<ln::granularity>(block_output + iter_idx, iteration_buffer);
+        }
+    }
+}
+
+#define LAUNCH_FUSED_LN(unroll_factor) \
+    fused_ln<T, unroll_factor>         \
+        <<<grid, block, 0, stream>>>(output, vals, gamma, beta, epsilon, elems_per_row);
+
+template <typename T>
+void launch_fused_ln(T* output,
+                     const T* vals,
+                     const T* gamma,
+                     const T* beta,
+                     float epsilon,
+                     int rows,
+                     int elems_per_row,
+                     cudaStream_t stream)
+{
+    constexpr int max_unroll = 4;
+
+    // 8 for __half, 4 for float
+    constexpr int T_per_load = ln::granularity / sizeof(T);
+    // 32 for __half, 16 for float
+    constexpr int T_per_thread_unroll = T_per_load * ln::internal_unroll;
+    // 1024 for __half, 512 for float
+    constexpr int T_per_warp_unroll = T_per_thread_unroll * hw_warp_size;
+
+    int32_t unroll = 1;
+    while (T_per_warp_unroll * ln::max_warps * unroll < elems_per_row) { unroll++; }
+
+    const int warps =
+        (elems_per_row + unroll * T_per_warp_unroll - 1) / (unroll * T_per_warp_unroll);
+
+    dim3 grid(rows);
+    dim3 block(warps * hw_warp_size);
+
+    // This should match the max_unroll constexpr
+    if (unroll == 1) {
+        LAUNCH_FUSED_LN(1);
+    } else if (unroll == 2) {
+        LAUNCH_FUSED_LN(2);
+    } else if (unroll == 3) {
+        LAUNCH_FUSED_LN(3);
+    } else if (unroll == 4) {
+        LAUNCH_FUSED_LN(4);
+    }
+}
+
+template void launch_fused_ln(__half*,
+                              const __half*,
+                              const __half*,
+                              const __half*,
+                              float,
+                              int,
+                              int,
+                              cudaStream_t);
+template void
+launch_fused_ln(float*, const float*, const float*, const float*, float, int, int, cudaStream_t);
+
+template <typename T, int UNROLL>
+__global__ void fused_residual_ln(T* output,
+                                  const T* vals,
+                                  const T* residual,
+                                  const T* bias,
+                                  const T* gamma,
+                                  const T* beta,
+                                  float epsilon,
+                                  int elems_per_row)
+{
+    constexpr int T_per_load = ln::granularity / sizeof(T);
+
+    cg::thread_block tb = cg::this_thread_block();
+    cg::thread_block_tile<hw_warp_size> warp = cg::tiled_partition<hw_warp_size>(tb);
+
+    __shared__ float sum_buffer[ln::max_warps];
+    __shared__ float var_buffer[ln::max_warps];
+
+    // X-dimension of the block
+    const int block_offset = tb.group_index().x * elems_per_row;
+    const int thread_offset = tb.thread_index().x * T_per_load;
+    const int base_offset = block_offset + thread_offset;
+    const int stride = tb.size() * T_per_load;
+
+    float partial_sum = 0.f;
+
+    const T* input_base = vals + base_offset;
+    const T* residual_base = residual + base_offset;
+    const T* bias_base = bias + thread_offset;
+
+    T local_buffer[UNROLL * ln::internal_unroll * T_per_load];
+
+    // Unlike a vanilla layernorm, since we're fusing the two adds as well
+    // an inner unroll seems to be less valuable. If anything, a double unroll
+    // makes the most sense if we find we are having performance issues.
+#pragma unroll
+    for (int i = 0; i < UNROLL * ln::internal_unroll; i++) {
+        T* iteration_buffer = local_buffer + i * T_per_load;
+        T residual_buffer[T_per_load];
+        T bias_buffer[T_per_load];
+
+        mem_access::load_global<ln::granularity>(
+            iteration_buffer, input_base + i * stride, thread_offset + i * stride < elems_per_row);
+        mem_access::load_global<ln::granularity>(residual_buffer,
+                                                 residual_base + i * stride,
+                                                 thread_offset + i * stride < elems_per_row);
+        mem_access::load_global<ln::granularity>(
+            bias_buffer, bias_base + i * stride, thread_offset + i * stride < elems_per_row);
+
+#pragma unroll
+        for (int j = 0; j < T_per_load; j++) {
+            float vals_up_cast = conversion::to<float>(iteration_buffer[j]);
+            float res_up_cast = conversion::to<float>(residual_buffer[j]);
+            float bias_up_cast = conversion::to<float>(bias_buffer[j]);
+            vals_up_cast += res_up_cast + bias_up_cast;
+            partial_sum += vals_up_cast;
+            iteration_buffer[j] = conversion::to<T>(vals_up_cast);
+        }
+    }
+
+    const float sum = ln_sum_reduce<ln::max_warps>(tb, warp, sum_buffer, partial_sum);
+    const float mean = sum / elems_per_row;
+
+    float partial_mean_diff = 0.f;
+#pragma unroll
+    for (int i = 0; i < UNROLL * ln::internal_unroll; i++) {
+#pragma unroll
+        for (int j = 0; j < T_per_load; j++) {
+            // Using a 0 value here skews the variance, have to if-guard
+            if (thread_offset + i * stride < elems_per_row) {
+                float diff = (conversion::to<float>(local_buffer[i * T_per_load + j]) - mean);
+                partial_mean_diff += diff * diff;
+            }
+        }
+    }
+
+    const float mean_diff = ln_sum_reduce<ln::max_warps>(tb, warp, var_buffer, partial_mean_diff);
+    const float variance = mean_diff / elems_per_row;
+    const float denom = __frsqrt_rn(variance + epsilon);
+
+    const T mean_compute = conversion::to<T>(mean);
+    const T denom_compute = conversion::to<T>(denom);
+
+    T* block_output = output + block_offset;
+
+#pragma unroll
+    for (int i = 0; i < UNROLL * ln::internal_unroll; i++) {
+        T* iteration_buffer = local_buffer + i * T_per_load;
+        const int iter_idx = i * stride + thread_offset;
+        const bool do_loads = iter_idx < elems_per_row;
+
+        T gamma_local[T_per_load], beta_local[T_per_load];
+
+        mem_access::load_global<ln::granularity>(gamma_local, gamma + iter_idx, do_loads);
+        mem_access::load_global<ln::granularity>(beta_local, beta + iter_idx, do_loads);
+
+#pragma unroll
+        for (int j = 0; j < T_per_load; j++) {
+            iteration_buffer[j] = (iteration_buffer[j] - mean_compute) * denom_compute;
+            iteration_buffer[j] = iteration_buffer[j] * gamma_local[j] + beta_local[j];
+        }
+
+        if (do_loads) {
+            mem_access::store_global<ln::granularity>(block_output + iter_idx, iteration_buffer);
+        }
+    }
+}
+
+#define LAUNCH_FUSED_RES_LN(unroll_factor)                           \
+    fused_residual_ln<T, unroll_factor><<<grid, block, 0, stream>>>( \
+        output, vals, residual, bias, gamma, beta, epsilon, elems_per_row);
+
+template <typename T>
+void launch_fused_residual_ln(T* output,
+                              const T* vals,
+                              const T* residual,
+                              const T* bias,
+                              const T* gamma,
+                              const T* beta,
+                              float epsilon,
+                              int rows,
+                              int elems_per_row,
+                              cudaStream_t stream)
+{
+    constexpr int max_unroll = 4;
+
+    // 8 for __half, 4 for float
+    constexpr int T_per_load = ln::granularity / sizeof(T);
+    // 32 for __half, 16 for float
+    constexpr int T_per_thread_unroll = T_per_load * ln::internal_unroll;
+    // 1024 for __half, 512 for float
+    constexpr int T_per_warp_unroll = T_per_thread_unroll * hw_warp_size;
+
+    int32_t unroll = 1;
+    while (T_per_warp_unroll * ln::max_warps * unroll < elems_per_row) { unroll++; }
+
+    const int warps =
+        (elems_per_row + unroll * T_per_warp_unroll - 1) / (unroll * T_per_warp_unroll);
+
+    dim3 grid(rows);
+    dim3 block(warps * hw_warp_size);
+
+    // This should match the max_unroll constexpr
+    if (unroll == 1) {
+        LAUNCH_FUSED_RES_LN(1);
+    } else if (unroll == 2) {
+        LAUNCH_FUSED_RES_LN(2);
+    } else if (unroll == 3) {
+        LAUNCH_FUSED_RES_LN(3);
+    } else if (unroll == 4) {
+        LAUNCH_FUSED_RES_LN(4);
+    }
+}
+
+template void launch_fused_residual_ln(__half*,
+                                       const __half*,
+                                       const __half*,
+                                       const __half*,
+                                       const __half*,
+                                       const __half*,
+                                       float,
+                                       int,
+                                       int,
+                                       cudaStream_t);
+template void launch_fused_residual_ln(float*,
+                                       const float*,
+                                       const float*,
+                                       const float*,
+                                       const float*,
+                                       const float*,
+                                       float,
+                                       int,
+                                       int,
+                                       cudaStream_t);
+
+namespace cg = cooperative_groups;
+
+namespace act_quant {
+constexpr int granularity = 16;
+constexpr int h_per_load = granularity / sizeof(__half);
+constexpr int h2_per_load = granularity / sizeof(__half2);
+
+constexpr int threads = 256;
+// BRITTLE
+constexpr int warp_size = 32;
+constexpr int num_warps = threads / warp_size;
+
+constexpr int internal_unroll = 2;
+constexpr int h_per_step = h_per_load * internal_unroll;
+
+// Currently hardcoded, can re-evaluate in the future
+constexpr int q_bits = 8;
+constexpr int q_range = 1 << q_bits;
+}  // namespace act_quant
+
+/*
+Quantization reduction helper. Input is the max value seen by each thread,
+returns the quantization scale. Inverse still needs to be stored to global
+memory by the caller.
+*/
+__device__ __forceinline__ float get_scale(cg::thread_block& tb,
+                                           cg::thread_block_tile<act_quant::warp_size>& warp,
+                                           float* max_buffer,
+                                           float thread_max_arg)
+{
+    float thread_max_f = thread_max_arg;
+
+#pragma unroll
+    for (int i = act_quant::warp_size / 2; i > 0; i /= 2) {
+        thread_max_f = fmaxf(thread_max_f, warp.shfl_down(thread_max_f, i));
+    }
+
+    // If we have more than one warp, then we need another stage of reduction.
+    if (warp.meta_group_size() > 1) {
+        if (warp.thread_rank() == 0) max_buffer[warp.meta_group_rank()] = thread_max_f;
+
+        // Safe in the conditional since all threads will evaluate the if-statement identically
+        tb.sync();
+
+        if (warp.meta_group_rank() == 0) {
+            float r_max = 0.f;
+            if (warp.thread_rank() < warp.meta_group_size()) r_max = max_buffer[warp.thread_rank()];
+
+#pragma unroll
+            for (int i = act_quant::num_warps / 2; i > 0; i /= 2) {
+                r_max = max(r_max, warp.shfl_down(r_max, i));
+            }
+
+            const float quantization_scale = act_quant::q_range / (2 * r_max);
+
+            if (warp.thread_rank() == 0) { max_buffer[0] = quantization_scale; }
+        }
+
+        // Safe in the conditional since all threads will evaluate the if-statement identically
+        tb.sync();
+
+        return max_buffer[0];
+    } else {
+        // Otherwise broadcast from thread 0 and continue
+        const float quantization_scale = act_quant::q_range / (2 * thread_max_f);
+
+        return warp.shfl(quantization_scale, 0);
+        // return warp.shfl(thread_max_f, 0);
+    }
+}
+
+/*
+Quantization inner loop helper.
+*/
+template <int q_bits>
+__device__ __forceinline__ void quant_16_bytes(int8_t* local_output,
+                                               const __half* data,
+                                               float scale)
+{
+    constexpr int32_t q_min = -(1 << (q_bits - 1));
+    constexpr int32_t q_max = (1 << (q_bits - 1)) - 1;
+    constexpr int32_t elems = 16 / sizeof(__half);
+
+#pragma unroll
+    for (int i = 0; i < elems; i++) {
+        // TODO(cmikeh2): refactor to use conversion utils
+        float data_f = __half2float(data[i]) * scale;
+        int32_t data_i32 = __float2int_rn(data_f);
+        data_i32 = min(max(data_i32, q_min), q_max);
+        local_output[i] = (int8_t)data_i32;
+    }
+}
+
+/*
+Input could be in __half2, just convert and pass to the base implementation.
+*/
+template <int q_bits>
+__device__ __forceinline__ void quant_16_bytes(int8_t* local_output,
+                                               const __half2* data,
+                                               float scale)
+{
+    const __half* data_cast = reinterpret_cast<const __half*>(data);
+    quant_16_bytes<q_bits>(local_output, data_cast, scale);
+}
+
+DS_D_INLINE
+__half2 h2_max(__half2 lhs, __half2 rhs)
+{
+#if __CUDA_ARCH__ >= 800
+    return __hmax2(lhs, rhs);
+#else
+    __half2 ret_val;
+    ret_val.x = (lhs.x > rhs.x) ? lhs.x : rhs.x;
+    ret_val.y = (lhs.y > rhs.y) ? lhs.y : rhs.y;
+    return ret_val;
+#endif
+}
+template <int UNROLL>
+__device__ void device_quantize(__half* local_buffer_h,
+                                float* __restrict__ scales,
+                                int8_t* __restrict__ output_data,
+                                const int& base_offset,
+                                const int& elem_offset,
+                                const int& stride,
+                                const int& elems_per_group)
+{
+    // Conservative allocation, shared memory won't be an occupancy limiter though
+    __half2* local_buffer = reinterpret_cast<__half2*>(local_buffer_h);
+    __shared__ float max_buffer[act_quant::num_warps];
+
+    cg::thread_block tb = cg::this_thread_block();
+    cg::thread_block_tile<act_quant::warp_size> warp =
+        cg::tiled_partition<act_quant::warp_size>(tb);
+
+    float2 zeros = {0.f, 0.f};
+    __half2 thread_max_h2 = __float22half2_rn(zeros);
+#pragma unroll
+    for (int i = 0; i < UNROLL; i++) {
+        // Convenience helper, should resolve to register indices and not realize
+        __half2* iteration_buffer =
+            local_buffer + i * act_quant::internal_unroll * act_quant::h2_per_load;
+        // TODO(cmikeh2): this might be faster with a tree reduce
+        // but in general should mem bottlenecked so not a priority
+#pragma unroll
+        for (int j = 0; j < act_quant::internal_unroll * act_quant::h2_per_load; j++) {
+            thread_max_h2 = h2_max(thread_max_h2, __habs2(iteration_buffer[j]));
+        }
+    }
+    float2 thread_max_f2 = __half22float2(thread_max_h2);
+    float thread_max_f = fmaxf(thread_max_f2.x, thread_max_f2.y);
+
+    float q_scale = get_scale(tb, warp, max_buffer, thread_max_f);
+    if (tb.thread_index().x == 0) scales[tb.group_index().x] = 1 / q_scale;
+
+    int8_t* output_base = output_data + base_offset;
+
+#pragma unroll
+    for (int i = 0; i < UNROLL * act_quant::internal_unroll; i++) {
+        int8_t local_output[act_quant::h_per_load];
+
+        quant_16_bytes<act_quant::q_bits>(
+            local_output, local_buffer + i * act_quant::h2_per_load, q_scale);
+
+        if (elem_offset + i * stride < elems_per_group) {
+            mem_access::store_global<act_quant::granularity / 2>(output_base + i * stride,
+                                                                 local_output);
+        }
+    }
+}
+
+template <typename T, int UNROLL>
+__global__ void fused_residual_ln(T* output,
+                                  int8_t* out_int8,
+                                  float* scales,
+                                  const T* vals,
+                                  const T* residual,
+                                  const T* bias,
+                                  const T* gamma,
+                                  const T* beta,
+                                  float epsilon,
+                                  int elems_per_row)
+{
+    constexpr int T_per_load = ln::granularity / sizeof(T);
+
+    cg::thread_block tb = cg::this_thread_block();
+    cg::thread_block_tile<hw_warp_size> warp = cg::tiled_partition<hw_warp_size>(tb);
+
+    __shared__ float sum_buffer[ln::max_warps];
+    __shared__ float var_buffer[ln::max_warps];
+
+    // X-dimension of the block
+    const int block_offset = tb.group_index().x * elems_per_row;
+    const int thread_offset = tb.thread_index().x * T_per_load;
+    const int base_offset = block_offset + thread_offset;
+    const int stride = tb.size() * T_per_load;
+
+    float partial_sum = 0.f;
+
+    const T* input_base = vals + base_offset;
+    const T* residual_base = residual + base_offset;
+    const T* bias_base = bias + thread_offset;
+
+    T local_buffer[UNROLL * ln::internal_unroll * T_per_load];
+
+    // Unlike a vanilla layernorm, since we're fusing the two adds as well
+    // an inner unroll seems to be less valuable. If anything, a double unroll
+    // makes the most sense if we find we are having performance issues.
+#pragma unroll
+    for (int i = 0; i < UNROLL * ln::internal_unroll; i++) {
+        T* iteration_buffer = local_buffer + i * T_per_load;
+        T residual_buffer[T_per_load];
+        T bias_buffer[T_per_load];
+
+        mem_access::load_global<ln::granularity>(
+            iteration_buffer, input_base + i * stride, thread_offset + i * stride < elems_per_row);
+        mem_access::load_global<ln::granularity>(residual_buffer,
+                                                 residual_base + i * stride,
+                                                 thread_offset + i * stride < elems_per_row);
+        mem_access::load_global<ln::granularity>(
+            bias_buffer, bias_base + i * stride, thread_offset + i * stride < elems_per_row);
+
+#pragma unroll
+        for (int j = 0; j < T_per_load; j++) {
+            float vals_up_cast = conversion::to<float>(iteration_buffer[j]);
+            float res_up_cast = conversion::to<float>(residual_buffer[j]);
+            float bias_up_cast = conversion::to<float>(bias_buffer[j]);
+            vals_up_cast += res_up_cast + bias_up_cast;
+            partial_sum += vals_up_cast;
+            iteration_buffer[j] = conversion::to<T>(vals_up_cast);
+        }
+    }
+
+    const float sum = ln_sum_reduce<ln::max_warps>(tb, warp, sum_buffer, partial_sum);
+    const float mean = sum / elems_per_row;
+
+    float partial_mean_diff = 0.f;
+#pragma unroll
+    for (int i = 0; i < UNROLL * ln::internal_unroll; i++) {
+#pragma unroll
+        for (int j = 0; j < T_per_load; j++) {
+            // Using a 0 value here skews the variance, have to if-guard
+            if (thread_offset + i * stride < elems_per_row) {
+                float diff = (conversion::to<float>(local_buffer[i * T_per_load + j]) - mean);
+                partial_mean_diff += diff * diff;
+            }
+        }
+    }
+
+    const float mean_diff = ln_sum_reduce<ln::max_warps>(tb, warp, var_buffer, partial_mean_diff);
+    const float variance = mean_diff / elems_per_row;
+    const float denom = __frsqrt_rn(variance + epsilon);
+
+    const T mean_compute = conversion::to<T>(mean);
+    const T denom_compute = conversion::to<T>(denom);
+
+    T* block_output = output + block_offset;
+
+#pragma unroll
+    for (int i = 0; i < UNROLL * ln::internal_unroll; i++) {
+        T* iteration_buffer = local_buffer + i * T_per_load;
+        const int iter_idx = i * stride + thread_offset;
+        const bool do_loads = iter_idx < elems_per_row;
+
+        T gamma_local[T_per_load], beta_local[T_per_load];
+
+        mem_access::load_global<ln::granularity>(gamma_local, gamma + iter_idx, do_loads);
+        mem_access::load_global<ln::granularity>(beta_local, beta + iter_idx, do_loads);
+
+#pragma unroll
+        for (int j = 0; j < T_per_load; j++) {
+            iteration_buffer[j] = (iteration_buffer[j] - mean_compute) * denom_compute;
+            iteration_buffer[j] = iteration_buffer[j] * gamma_local[j] + beta_local[j];
+        }
+
+        if (do_loads) {
+            mem_access::store_global<ln::granularity>(block_output + iter_idx, iteration_buffer);
+        }
+        device_quantize<UNROLL>(
+            local_buffer, scales, out_int8, base_offset, thread_offset, stride, elems_per_row);
+    }
+}
+#define LAUNCH_FUSED_RES_LN(unroll_factor)                           \
+    fused_residual_ln<T, unroll_factor><<<grid, block, 0, stream>>>( \
+        output, out_int8, scales, vals, residual, bias, gamma, beta, epsilon, elems_per_row);
+
+template <typename T>
+void launch_fused_residual_ln(int8_t* out_int8,
+                              T* output,
+                              float* scales,
+                              const T* vals,
+                              const T* residual,
+                              const T* bias,
+                              const T* gamma,
+                              const T* beta,
+                              float epsilon,
+                              int rows,
+                              int elems_per_row,
+                              cudaStream_t stream)
+{
+    constexpr int max_unroll = 4;
+
+    // 8 for __half, 4 for float
+    constexpr int T_per_load = ln::granularity / sizeof(T);
+    // 32 for __half, 16 for float
+    constexpr int T_per_thread_unroll = T_per_load * ln::internal_unroll;
+    // 1024 for __half, 512 for float
+    constexpr int T_per_warp_unroll = T_per_thread_unroll * hw_warp_size;
+
+    int32_t unroll = 1;
+    while (T_per_warp_unroll * ln::max_warps * unroll < elems_per_row) { unroll++; }
+
+    const int warps =
+        (elems_per_row + unroll * T_per_warp_unroll - 1) / (unroll * T_per_warp_unroll);
+
+    dim3 grid(rows);
+    dim3 block(warps * hw_warp_size);
+
+    // This should match the max_unroll constexpr
+    if (unroll == 1) {
+        LAUNCH_FUSED_RES_LN(1);
+    } else if (unroll == 2) {
+        LAUNCH_FUSED_RES_LN(2);
+    } else if (unroll == 3) {
+        LAUNCH_FUSED_RES_LN(3);
+    } else if (unroll == 4) {
+        LAUNCH_FUSED_RES_LN(4);
+    }
+}
+
+template void launch_fused_residual_ln(int8_t*,
+                                       __half*,
+                                       float*,
+                                       const __half*,
+                                       const __half*,
+                                       const __half*,
+                                       const __half*,
+                                       const __half*,
+                                       float,
+                                       int,
+                                       int,
+                                       cudaStream_t);

@@ -217,6 +217,7 @@ class DeepSpeedSelfAttentionFunction(Function):
                                    config.epsilon,
                                    (attn_qkvb is not None),
                                    DeepSpeedTransformerInference.layer_id,
+                                   False,
                                    config.mp_size,
                                    dist.get_rank() if dist.is_initialized() else 0,
                                    config.enable_qkv_quantization)
