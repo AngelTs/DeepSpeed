@@ -1706,7 +1706,7 @@ constexpr int threads = 256;
 constexpr int warp_size = 32;
 constexpr int num_warps = threads / warp_size;
 
-constexpr int internal_unroll = 2;
+constexpr int internal_unroll = 4;
 constexpr int h_per_step = h_per_load * internal_unroll;
 
 // Currently hardcoded, can re-evaluate in the future
@@ -1971,9 +1971,9 @@ __global__ void fused_residual_ln(T* output,
         if (do_loads) {
             mem_access::store_global<ln::granularity>(block_output + iter_idx, iteration_buffer);
         }
-        device_quantize<UNROLL>(
-            local_buffer, scales, out_int8, base_offset, thread_offset, stride, elems_per_row);
     }
+    device_quantize<UNROLL>(
+        local_buffer, scales, out_int8, base_offset, thread_offset, stride, elems_per_row);
 }
 #define LAUNCH_FUSED_RES_LN(unroll_factor)                           \
     fused_residual_ln<T, unroll_factor><<<grid, block, 0, stream>>>( \
