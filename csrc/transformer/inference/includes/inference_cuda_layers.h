@@ -401,6 +401,12 @@ void launch_act_quant(int8_t* output_data,
                       int groups,
                       int elems_per_group,
                       cudaStream_t stream);
+void launch_act_quant_int4(int8_t* output_data,
+                      float* scales,
+                      const __half* input_data,
+                      int groups,
+                      int elems_per_group,
+                      cudaStream_t stream);
 
 void launch_gelu_quant(int8_t* output_data,
                        float* scales,

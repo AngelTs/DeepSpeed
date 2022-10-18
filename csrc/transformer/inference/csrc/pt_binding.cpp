@@ -1888,7 +1888,7 @@ void TransformerEncoder(at::Tensor& input,
         buf_2, buf_0, bsz, num_heads, _seq_length, hidden_dim, new_stream, 1);
     if (q_int) {
         int out_size = attn_weights[1].size(0);
-        if (q_bits == 8 or q_bits == 4) {
+        if (q_bits == 8) {
             launch_act_quant((int8_t*)aux_buff,
                             (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                             (__half*)buf_2,
@@ -1909,12 +1909,18 @@ void TransformerEncoder(at::Tensor& input,
         } else {
             assert(q_bits == 4);
             std::cout << "attn_ow" << std::endl;
-            run_quantize_int4((int8_t*)aux_buff,
-                              (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                              (__half*)buf_2,
-                              input.size(2),
-                              bsz_seq,
-                              Context::Instance().GetCurrentStream());
+            // run_quantize_int4((int8_t*)aux_buff,
+            //                   (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+            //                   (__half*)buf_2,
+            //                   input.size(2),
+            //                   bsz_seq,
+            //                   new_stream);
+            launch_act_quant_int4((int8_t*)aux_buff,
+                            (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                            (__half*)buf_2,
+                            bsz_seq,
+                            input.size(2),
+                            new_stream);
             run_gemm_int4(aux_buff,
                           attn_weights[1].data_ptr(),
                           buf_1,
@@ -2131,6 +2137,64 @@ std::vector<at::Tensor> ds_act_quant(at::Tensor& input_vals, int groups)
     return {output, scales};
 }
 
+std::vector<at::Tensor> ds_act_quant_int4(at::Tensor& input_vals, int groups)
+{
+    auto scales_options = at::TensorOptions()
+                              .dtype(at::kFloat)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+    auto scales = torch::empty({groups}, scales_options);
+
+    auto output_options = at::TensorOptions()
+                              .dtype(at::kChar)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+    int M = input_vals.size(0);
+    int K = input_vals.size(1);
+
+    auto output = torch::empty({M, K/2}, output_options);
+
+    const int elems_per_group = at::numel(input_vals) / groups;
+
+    launch_act_quant_int4((int8_t*)output.data_ptr(),
+                     (float*)scales.data_ptr(),
+                     (__half*)input_vals.data_ptr(),
+                     groups,
+                     elems_per_group,
+                     at::cuda::getCurrentCUDAStream());
+
+    return {output, scales};
+}
+
+std::vector<at::Tensor> ds_act_quant_int4_old(torch::Tensor &input_vals, int groups) {
+    auto scales_options = at::TensorOptions()
+                              .dtype(at::kFloat)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+    auto scales = torch::empty({groups}, scales_options);
+
+    int M = input_vals.size(0);
+    int K = input_vals.size(1);
+
+    auto output_options = at::TensorOptions()
+                              .dtype(at::kChar)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+    auto output = torch::empty({M, K/2}, output_options);
+
+    run_quantize_int4((int8_t*)output.data_ptr(),
+                     (float*)scales.data_ptr(),
+                     (__half*)input_vals.data_ptr(),
+                     K,
+                     M,
+                     at::cuda::getCurrentCUDAStream());
+    return {output, scales};
+}
+
 std::vector<at::Tensor> ds_act_quant_old(at::Tensor& input_vals, int groups)
 {
     auto scales_options = at::TensorOptions()
@@ -2158,6 +2222,7 @@ std::vector<at::Tensor> ds_act_quant_old(at::Tensor& input_vals, int groups)
 
     return {output, scales};
 }
+
 
 template <typename T>
 std::vector<at::Tensor> Encoder_QKV(at::Tensor& input,
@@ -2535,16 +2600,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("encoder_fp16",
           &TransformerEncoder<__half>,
           "DeepSpeed transformerEncoder with fp16 (CUDA)");
-    m.def("ds_act_quant", &ds_act_quant);
-    m.def("ds_act_quant_old", &ds_act_quant_old);
     m.def("encoder_qkv_fp32", &Encoder_QKV<float>, "DeepSpeed transformerEncoder with fp32 (CUDA)");
     m.def(
         "encoder_qkv_fp16", &Encoder_QKV<__half>, "DeepSpeed transformerEncoder with fp16 (CUDA)");
     m.def("encoder_mlp_fp32", &Encoder_mlp<float>, "DeepSpeed transformerEncoder with fp32 (CUDA)");
     m.def(
         "encoder_mlp_fp16", &Encoder_mlp<__half>, "DeepSpeed transformerEncoder with fp16 (CUDA)");
-
     m.def("ds_act_quant", &ds_act_quant);
+    m.def("ds_act_quant_int4", &ds_act_quant_int4);
+    m.def("ds_act_quant_int4_old", &ds_act_quant_int4_old);
     m.def("ds_act_quant_old", &ds_act_quant_old);
     m.def("fused_ln", &fused_ln);
     m.def("fused_residual_ln", &fused_residual_ln);
