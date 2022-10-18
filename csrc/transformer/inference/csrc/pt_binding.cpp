@@ -1768,7 +1768,7 @@ void TransformerEncoder(at::Tensor& input,
         } else {
             assert(q_bits == 4);
             std::cout << "attn_akvw" << std::endl;
-            run_quantize_int4((int8_t*)aux_buff,
+            launch_act_quant_int4((int8_t*)aux_buff,
                               (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                               (__half*)(preln ? buf_0 : input_ptr),
                               input.size(2),
@@ -1888,7 +1888,7 @@ void TransformerEncoder(at::Tensor& input,
         buf_2, buf_0, bsz, num_heads, _seq_length, hidden_dim, new_stream, 1);
     if (q_int) {
         int out_size = attn_weights[1].size(0);
-        if (q_bits == 8) {
+        if (q_bits == 8 or q_bits == 4) {
             launch_act_quant((int8_t*)aux_buff,
                             (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                             (__half*)buf_2,
@@ -1909,12 +1909,6 @@ void TransformerEncoder(at::Tensor& input,
         } else {
             assert(q_bits == 4);
             std::cout << "attn_ow" << std::endl;
-            // run_quantize_int4((int8_t*)aux_buff,
-            //                   (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-            //                   (__half*)buf_2,
-            //                   input.size(2),
-            //                   bsz_seq,
-            //                   new_stream);
             launch_act_quant_int4((int8_t*)aux_buff,
                             (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                             (__half*)buf_2,
@@ -1947,46 +1941,22 @@ void TransformerEncoder(at::Tensor& input,
                        buf_1,
                        CUBLAS_GEMM_DEFAULT_TENSOR_OP);
     }
-    // launch_residual_layer_norm1<T>(buf_4,
-    //                           buf_1,
-    //                           input_ptr,
-    //                           (T*)attn_biases[1].data_ptr(),
-    //                           (T*)attn_norm[0].data_ptr(),
-    //                           (T*)attn_norm[1].data_ptr(),
-    //                           epsilon,
-    //                           bsz_seq,
-    //                           hidden_dim,
-    //                           new_stream);
-    launch_fused_residual_ln(buf_4,
-                             buf_1,
-                             input_ptr,
-                             (T*)attn_biases[1].data_ptr(),
-                             (T*)attn_norm[0].data_ptr(),
-                             (T*)attn_norm[1].data_ptr(),
-                             epsilon,
-                             bsz_seq,
-                             hidden_dim,
-                             new_stream);
+
     if (q_int) {
         int out_size = mlp_weights[0].size(0);
         if (q_bits == 8 or q_bits == 4) {
-            launch_act_quant((int8_t*)aux_buff,
-                            (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                            (__half*)buf_4,
-                            bsz_seq,
-                            input.size(2),
-                            new_stream);
-            // launch_ln_quant((int8_t*)aux_buff,
-            //             (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-            //             (__half*)(preln ? buf_1 : buf_4),
-            //             (__half*)input_ptr,
-            //             (__half*)attn_biases[1].data_ptr(),
-            //             (__half*)attn_norm[0].data_ptr(),
-            //             (__half*)attn_norm[1].data_ptr(),
-            //             epsilon,
-            //             bsz_seq,
-            //             input.size(2),
-            //             new_stream);
+            launch_fused_residual_ln((int8_t*)aux_buff,
+                                    (__half*)buf_4,
+                                    (float*)((int8_t*)aux_buff + bsz1 * hidden_dim),
+                                    (__half*)buf_1,
+                                    (__half*)input_ptr,
+                                    (__half*)attn_biases[1].data_ptr(),
+                                    (__half*)attn_norm[0].data_ptr(),
+                                    (__half*)attn_norm[1].data_ptr(),
+                                    epsilon,
+                                    bsz_seq,
+                                    hidden_dim,
+                                    new_stream);
             run_gemm(aux_buff,
                     mlp_weights[0].data_ptr(),
                     aux_buff1,
@@ -2058,6 +2028,16 @@ void TransformerEncoder(at::Tensor& input,
                           Context::Instance().GetCurrentStream());
         }
     } else {
+        launch_fused_residual_ln(buf_4,
+                                 buf_1,
+                                 input_ptr,
+                                 (T*)attn_biases[1].data_ptr(),
+                                 (T*)attn_norm[0].data_ptr(),
+                                 (T*)attn_norm[1].data_ptr(),
+                                 epsilon,
+                                 bsz_seq,
+                                 hidden_dim,
+                                 new_stream);
         cublas_gemm_ex(cub_handle,
                        CUBLAS_OP_N,
                        CUBLAS_OP_N,
@@ -2087,16 +2067,16 @@ void TransformerEncoder(at::Tensor& input,
                        CUBLAS_GEMM_DEFAULT_TENSOR_OP);
     }
     if (!preln) {
-        launch_residual_layer_norm1<T>(input_ptr,
-                                       buf_5,
-                                       buf_4,
-                                       (T*)mlp_biases[1].data_ptr(),
-                                       (T*)input_norm[0].data_ptr(),
-                                       (T*)input_norm[1].data_ptr(),
-                                       epsilon,
-                                       bsz_seq,
-                                       hidden_dim,
-                                       new_stream);
+        launch_fused_residual_ln(input_ptr,
+                                 buf_5,
+                                 buf_4,
+                                 (T*)mlp_biases[1].data_ptr(),
+                                 (T*)input_norm[0].data_ptr(),
+                                 (T*)input_norm[1].data_ptr(),
+                                 epsilon,
+                                 bsz_seq,
+                                 hidden_dim,
+                                 new_stream);
     } else
         launch_bias_residual1(input_ptr,
                               buf_5,
@@ -2434,7 +2414,7 @@ void Encoder_mlp(at::Tensor& input,
                                  (float*)((int8_t*)aux_buff + bsz1 * hidden_dim),
                                  (__half*)buf_1,
                                  (__half*)input_ptr,
-                                 (__half*)attn_biases[1].data_ptr(),
+                                 (__half*)attn_biases.data_ptr(),
                                  (__half*)attn_norm[0].data_ptr(),
                                  (__half*)attn_norm[1].data_ptr(),
                                  epsilon,
@@ -2474,7 +2454,7 @@ void Encoder_mlp(at::Tensor& input,
         launch_fused_residual_ln(buf_4,
                                  buf_1,
                                  input_ptr,
-                                 (T*)attn_biases[1].data_ptr(),
+                                 (T*)attn_biases.data_ptr(),
                                  (T*)attn_norm[0].data_ptr(),
                                  (T*)attn_norm[1].data_ptr(),
                                  epsilon,
