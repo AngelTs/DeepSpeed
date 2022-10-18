@@ -154,7 +154,7 @@ __device__ __forceinline__ void quant_16_bytes(int8_t* local_output,
             int32_t data_i32_2 = __float2int_rn(data_f_2);
             int8_t data_i8_1 = (int8_t)min(max(data_i32_1, q_min), q_max);
             int8_t data_i8_2 = (int8_t)min(max(data_i32_2, q_min), q_max);
-            auto data_i8 = int4x2_t{data_i8_1, data_i8_2};
+            auto data_i8 = int4x2_t{data_i8_2, data_i8_1};
             local_output[i] =  *((int8_t*)(&data_i8));
         }
     }

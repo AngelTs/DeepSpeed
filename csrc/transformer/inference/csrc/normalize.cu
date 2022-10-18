@@ -1706,7 +1706,7 @@ constexpr int threads = 256;
 constexpr int warp_size = 32;
 constexpr int num_warps = threads / warp_size;
 
-constexpr int internal_unroll = 2;
+constexpr int internal_unroll = 2; // ln::internal_unroll
 constexpr int h_per_step = h_per_load * internal_unroll;
 
 // Currently hardcoded, can re-evaluate in the future
