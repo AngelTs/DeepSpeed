@@ -295,7 +295,7 @@ inline __device__ float q_gelu(const float x)
 /*
 Bias + GELU quantization kernel.
 */
-template <int UNROLL>
+template <int UNROLL, int q_bits>
 __global__ void fused_bias_gelu_quantization(int8_t* __restrict__ output_data,
                                              float* __restrict__ scales,
                                              const __half* __restrict__ input_data,
@@ -352,7 +352,7 @@ __global__ void fused_bias_gelu_quantization(int8_t* __restrict__ output_data,
         }
     }
 
-    device_quantize<UNROLL>(
+    device_quantize<UNROLL, q_bits>(
         local_buffer, scales, output_data, base_offset, elem_offset, stride, elems_per_group);
 }
 
@@ -638,11 +638,12 @@ void launch_act_quant_impl(int8_t* output_data,
     }
 }
 
-#define LAUNCH_GELU_QUANT(unroll_factor)                                     \
-    fused_bias_gelu_quantization<unroll_factor><<<grid, block, 0, stream>>>( \
+#define LAUNCH_GELU_QUANT(unroll_factor, q_bits)                                     \
+    fused_bias_gelu_quantization<unroll_factor, q_bits><<<grid, block, 0, stream>>>( \
         output_data, scales, input_data, bias_data, groups, elems_per_group);
 
-void launch_gelu_quant(int8_t* output_data,
+template <int q_bits>
+void launch_gelu_quant_impl(int8_t* output_data,
                        float* scales,
                        const __half* input_data,
                        const __half* bias_data,
@@ -666,16 +667,16 @@ void launch_gelu_quant(int8_t* output_data,
     if (external_unroll == 1) {
         // 0 - 4096 elems
         // (this can launch with 1-7 warps as well)
-        LAUNCH_GELU_QUANT(1);
+        LAUNCH_GELU_QUANT(1, q_bits);
     } else if (external_unroll == 2) {
         // 4097 - 8192 elems
-        LAUNCH_GELU_QUANT(2);
+        LAUNCH_GELU_QUANT(2, q_bits);
     } else if (external_unroll == 3) {
         // 8193 - 12288 elems
-        LAUNCH_GELU_QUANT(3);
+        LAUNCH_GELU_QUANT(3, q_bits);
     } else if (external_unroll == 4) {
         // 12289 - 16384 elems
-        LAUNCH_GELU_QUANT(4);
+        LAUNCH_GELU_QUANT(4, q_bits);
     }
 }
 
@@ -804,3 +805,35 @@ void launch_act_quant_int4(int8_t* output_data,
                       elems_per_group,
                       stream);
                       }
+
+void launch_gelu_quant(int8_t* output_data,
+                       float* scales,
+                       const __half* input_data,
+                       const __half* bias_data,
+                       int groups,
+                       int elems_per_group,
+                       cudaStream_t stream) {
+    launch_gelu_quant_impl<8>(output_data,
+                        scales,
+                        input_data,
+                        bias_data,
+                        groups,
+                        elems_per_group,
+                        stream);
+                       }
+
+void launch_gelu_quant_int4(int8_t* output_data,
+                       float* scales,
+                       const __half* input_data,
+                       const __half* bias_data,
+                       int groups,
+                       int elems_per_group,
+                       cudaStream_t stream) {
+    launch_gelu_quant_impl<4>(output_data,
+                        scales,
+                        input_data,
+                        bias_data,
+                        groups,
+                        elems_per_group,
+                        stream);
+                       }

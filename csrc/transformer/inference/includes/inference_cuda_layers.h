@@ -118,20 +118,31 @@ void launch_fused_residual_ln(T* output,
                               int elems_per_row,
                               cudaStream_t stream);
 
-template <typename T>
-void launch_fused_residual_ln(int8_t* out_int8,
-                              T* output,
+void launch_fused_residual_ln_quant(int8_t* out_int8,
+                              __half* output,
                               float* scales,
-                              const T* vals,
-                              const T* residual,
-                              const T* bias,
-                              const T* gamma,
-                              const T* beta,
+                              const __half* vals,
+                              const __half* residual,
+                              const __half* bias,
+                              const __half* gamma,
+                              const __half* beta,
                               float epsilon,
                               int rows,
                               int elems_per_row,
                               cudaStream_t stream);
 
+void launch_fused_residual_ln_quant_int4(int8_t* out_int8,
+                              __half* output,
+                              float* scales,
+                              const __half* vals,
+                              const __half* residual,
+                              const __half* bias,
+                              const __half* gamma,
+                              const __half* beta,
+                              float epsilon,
+                              int rows,
+                              int elems_per_row,
+                              cudaStream_t stream);
 template <typename T>
 void launch_dequantize(T* output,
                        const int8_t* input,
@@ -401,6 +412,7 @@ void launch_act_quant(int8_t* output_data,
                       int groups,
                       int elems_per_group,
                       cudaStream_t stream);
+
 void launch_act_quant_int4(int8_t* output_data,
                       float* scales,
                       const __half* input_data,
@@ -409,6 +421,14 @@ void launch_act_quant_int4(int8_t* output_data,
                       cudaStream_t stream);
 
 void launch_gelu_quant(int8_t* output_data,
+                       float* scales,
+                       const __half* input_data,
+                       const __half* bias_data,
+                       int groups,
+                       int elems_per_group,
+                       cudaStream_t stream);
+
+void launch_gelu_quant_int4(int8_t* output_data,
                        float* scales,
                        const __half* input_data,
                        const __half* bias_data,

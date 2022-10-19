@@ -194,7 +194,6 @@ class GroupQuantizer:
         if num_bits == 4:
             inputs_q = packInt4(inputs_q)
         out = torch.nn.Parameter(inputs_q, requires_grad=False)
-        # out.scale = scale
         inputs_split = inputs.split(inputs.shape[parallel_dim] // 2, dim=parallel_dim)
         input_flat = [
             inputs_split[i].reshape(self.num_groups,
@@ -615,8 +614,7 @@ def replace_transformer_layer(orig_layer_impl,
                 attn_block.attn_qkvw = quantizer.quantize(mp_replace.qkv_copy(
                     attn_block.attn_qkvw,
                     qkvw,
-                    q_int=enable_qkv_quantization),
-                                                          qkv=enable_qkv_quantization, force_int8=False)
+                    q_int=enable_qkv_quantization), qkv=enable_qkv_quantization, force_int8=False)
                 attn_block.attn_qkvb = \
                     mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
@@ -682,12 +680,12 @@ def replace_transformer_layer(orig_layer_impl,
                     mpl_block.inter_w = quantizer.quantize(
                         mp_replace.copy(mpl_block.inter_w,
                                         _h4h_w,
-                                        q_int=quantize), force_int8=True)
+                                        q_int=quantize), force_int8=False)
                     mpl_block.inter_b = mp_replace.copy(mpl_block.inter_b, _h4h_b)
                     mpl_block.output_w = quantizer.quantize(
                         mp_replace.copy(mpl_block.output_w,
                                         _4hh_w,
-                                        q_int=quantize), force_int8=True)
+                                        q_int=quantize), force_int8=False)
                     mpl_block.output_b = mp_replace.copy(mpl_block.output_b, _4hh_b)
 
                 if attn_nw is None:

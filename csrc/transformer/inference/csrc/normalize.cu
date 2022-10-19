@@ -1719,13 +1719,14 @@ Quantization reduction helper. Input is the max value seen by each thread,
 returns the quantization scale. Inverse still needs to be stored to global
 memory by the caller.
 */
+template <int q_bits>
 __device__ __forceinline__ float get_scale(cg::thread_block& tb,
                                            cg::thread_block_tile<act_quant::warp_size>& warp,
                                            float* max_buffer,
                                            float thread_max_arg)
 {
     float thread_max_f = thread_max_arg;
-
+    auto q_range = 1 << q_bits;
 #pragma unroll
     for (int i = act_quant::warp_size / 2; i > 0; i /= 2) {
         thread_max_f = fmaxf(thread_max_f, warp.shfl_down(thread_max_f, i));
@@ -1747,7 +1748,7 @@ __device__ __forceinline__ float get_scale(cg::thread_block& tb,
                 r_max = max(r_max, warp.shfl_down(r_max, i));
             }
 
-            const float quantization_scale = act_quant::q_range / (2 * r_max);
+            const float quantization_scale = q_range / (2 * r_max);
 
             if (warp.thread_rank() == 0) { max_buffer[0] = quantization_scale; }
         }
@@ -1758,12 +1759,17 @@ __device__ __forceinline__ float get_scale(cg::thread_block& tb,
         return max_buffer[0];
     } else {
         // Otherwise broadcast from thread 0 and continue
-        const float quantization_scale = act_quant::q_range / (2 * thread_max_f);
+        const float quantization_scale = q_range / (2 * thread_max_f);
 
         return warp.shfl(quantization_scale, 0);
         // return warp.shfl(thread_max_f, 0);
     }
 }
+
+struct int4x2_t {
+    int8_t high : 4;
+    int8_t low : 4;
+};
 
 /*
 Quantization inner loop helper.
@@ -1777,16 +1783,30 @@ __device__ __forceinline__ void quant_16_bytes(int8_t* local_output,
     constexpr int32_t q_max = (1 << (q_bits - 1)) - 1;
     constexpr int32_t elems = 16 / sizeof(__half);
 
+    if constexpr (q_bits == 8) {
 #pragma unroll
-    for (int i = 0; i < elems; i++) {
-        // TODO(cmikeh2): refactor to use conversion utils
-        float data_f = __half2float(data[i]) * scale;
-        int32_t data_i32 = __float2int_rn(data_f);
-        data_i32 = min(max(data_i32, q_min), q_max);
-        local_output[i] = (int8_t)data_i32;
+        for (int i = 0; i < elems; i++) {
+            // TODO(cmikeh2): refactor to use conversion utils
+            float data_f = __half2float(data[i]) * scale;
+            int32_t data_i32 = __float2int_rn(data_f);
+            data_i32 = min(max(data_i32, q_min), q_max);
+            local_output[i] = (int8_t)data_i32;
+        }
+
+    } else if constexpr (q_bits == 4) {
+#pragma unroll
+        for (int i = 0; i < elems / 2; i++) {
+            float data_f_1 = __half2float(data[2 * i]) * scale;
+            float data_f_2 = __half2float(data[2 * i + 1]) * scale;
+            int32_t data_i32_1 = __float2int_rn(data_f_1);
+            int32_t data_i32_2 = __float2int_rn(data_f_2);
+            int8_t data_i8_1 = (int8_t)min(max(data_i32_1, q_min), q_max);
+            int8_t data_i8_2 = (int8_t)min(max(data_i32_2, q_min), q_max);
+            auto data_i8 = int4x2_t{data_i8_2, data_i8_1};
+            local_output[i] = *((int8_t*)(&data_i8));
+        }
     }
 }
-
 /*
 Input could be in __half2, just convert and pass to the base implementation.
 */
@@ -1811,7 +1831,8 @@ __half2 h2_max(__half2 lhs, __half2 rhs)
     return ret_val;
 #endif
 }
-template <int UNROLL>
+
+template <int UNROLL, int q_bits = 8>
 __device__ void device_quantize(__half* local_buffer_h,
                                 float* __restrict__ scales,
                                 int8_t* __restrict__ output_data,
@@ -1845,27 +1866,33 @@ __device__ void device_quantize(__half* local_buffer_h,
     float2 thread_max_f2 = __half22float2(thread_max_h2);
     float thread_max_f = fmaxf(thread_max_f2.x, thread_max_f2.y);
 
-    float q_scale = get_scale(tb, warp, max_buffer, thread_max_f);
+    float q_scale = get_scale<q_bits>(tb, warp, max_buffer, thread_max_f);
     if (tb.thread_index().x == 0) scales[tb.group_index().x] = 1 / q_scale;
-
-    int8_t* output_base = output_data + base_offset;
 
 #pragma unroll
     for (int i = 0; i < UNROLL * act_quant::internal_unroll; i++) {
-        int8_t local_output[act_quant::h_per_load];
-
-        quant_16_bytes<act_quant::q_bits>(
-            local_output, local_buffer + i * act_quant::h2_per_load, q_scale);
-
-        if (elem_offset + i * stride < elems_per_group) {
-            mem_access::store_global<act_quant::granularity / 2>(output_base + i * stride,
-                                                                 local_output);
+        if constexpr (q_bits == 8) {
+            int8_t local_output[act_quant::h_per_load];
+            quant_16_bytes<act_quant::q_bits>(
+                local_output, local_buffer + i * act_quant::h2_per_load, q_scale);
+            if (elem_offset + i * stride < elems_per_group) {
+                mem_access::store_global<act_quant::granularity / 2>(
+                    output_data + base_offset + i * stride, local_output);
+            }
+        } else if constexpr (q_bits == 4) {
+            int8_t local_output[act_quant::h_per_load/2];
+            quant_16_bytes<act_quant::q_bits>(
+                local_output, local_buffer + i * act_quant::h2_per_load, q_scale);
+            if (elem_offset + i * stride < elems_per_group) {
+                mem_access::store_global<act_quant::granularity / 4>(
+                    output_data + (base_offset + i * stride)/2, local_output);
+            }
         }
     }
 }
 
-template <typename T, int UNROLL>
-__global__ void fused_residual_ln(T* output,
+template <typename T, int UNROLL, int q_bits>
+__global__ void fused_residual_ln_quant(T* output,
                                   int8_t* out_int8,
                                   float* scales,
                                   const T* vals,
@@ -1972,15 +1999,16 @@ __global__ void fused_residual_ln(T* output,
             mem_access::store_global<ln::granularity>(block_output + iter_idx, iteration_buffer);
         }
     }
-    device_quantize<UNROLL>(
+    device_quantize<UNROLL, q_bits>(
         local_buffer, scales, out_int8, base_offset, thread_offset, stride, elems_per_row);
 }
-#define LAUNCH_FUSED_RES_LN(unroll_factor)                           \
-    fused_residual_ln<T, unroll_factor><<<grid, block, 0, stream>>>( \
+
+#define LAUNCH_FUSED_RES_LN_QUANT(T, unroll_factor, q_bits)                           \
+    fused_residual_ln_quant<T, unroll_factor, q_bits><<<grid, block, 0, stream>>>( \
         output, out_int8, scales, vals, residual, bias, gamma, beta, epsilon, elems_per_row);
 
-template <typename T>
-void launch_fused_residual_ln(int8_t* out_int8,
+template <typename T, int q_bits>
+void launch_fused_residual_ln_quant_impl(int8_t* out_int8,
                               T* output,
                               float* scales,
                               const T* vals,
@@ -2013,25 +2041,42 @@ void launch_fused_residual_ln(int8_t* out_int8,
 
     // This should match the max_unroll constexpr
     if (unroll == 1) {
-        LAUNCH_FUSED_RES_LN(1);
+        LAUNCH_FUSED_RES_LN_QUANT(T, 1, q_bits);
     } else if (unroll == 2) {
-        LAUNCH_FUSED_RES_LN(2);
+        LAUNCH_FUSED_RES_LN_QUANT(T, 2, q_bits);
     } else if (unroll == 3) {
-        LAUNCH_FUSED_RES_LN(3);
+        LAUNCH_FUSED_RES_LN_QUANT(T, 3, q_bits);
     } else if (unroll == 4) {
-        LAUNCH_FUSED_RES_LN(4);
+        LAUNCH_FUSED_RES_LN_QUANT(T, 4, q_bits);
     }
 }
 
-template void launch_fused_residual_ln(int8_t*,
-                                       __half*,
-                                       float*,
-                                       const __half*,
-                                       const __half*,
-                                       const __half*,
-                                       const __half*,
-                                       const __half*,
-                                       float,
-                                       int,
-                                       int,
-                                       cudaStream_t);
+void launch_fused_residual_ln_quant(int8_t * out_int8,
+                                    __half * output,
+                                    float* scales,
+                                    const __half* vals,
+                                    const __half* residual,
+                                    const __half* bias,
+                                    const __half* gamma,
+                                    const __half* beta,
+                                    float epsilon,
+                                    int rows,
+                                    int elems_per_row,
+                                    cudaStream_t stream) {
+    launch_fused_residual_ln_quant_impl<__half, 8>(out_int8, output, scales, vals, residual, bias, gamma, beta, epsilon, rows, elems_per_row, stream);
+}
+
+void launch_fused_residual_ln_quant_int4(int8_t * out_int8,
+                                    __half * output,
+                                    float* scales,
+                                    const __half* vals,
+                                    const __half* residual,
+                                    const __half* bias,
+                                    const __half* gamma,
+                                    const __half* beta,
+                                    float epsilon,
+                                    int rows,
+                                    int elems_per_row,
+                                    cudaStream_t stream){
+    launch_fused_residual_ln_quant_impl<__half, 4>(out_int8, output, scales, vals, residual, bias, gamma, beta, epsilon, rows, elems_per_row, stream);
+}

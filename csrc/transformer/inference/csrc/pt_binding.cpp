@@ -1745,9 +1745,9 @@ void TransformerEncoder(at::Tensor& input,
                           bsz_seq,
                           hidden_dim,
                           new_stream);
-    if (q_int and enable_qkv_quantization) {
+    if (enable_qkv_quantization) {
         int out_size = attn_weights[0].size(0);
-        if (q_bits == 8 or q_bits == 4) {
+        if (q_bits == 8) {
             launch_act_quant((int8_t*)aux_buff,
                             (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                             (__half*)(preln ? buf_0 : input_ptr),
@@ -1767,24 +1767,23 @@ void TransformerEncoder(at::Tensor& input,
                     Context::Instance().GetCurrentStream());
         } else {
             assert(q_bits == 4);
-            std::cout << "attn_akvw" << std::endl;
             launch_act_quant_int4((int8_t*)aux_buff,
-                              (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                              (__half*)(preln ? buf_0 : input_ptr),
-                              input.size(2),
-                              bsz_seq,
-                              Context::Instance().GetCurrentStream());
+                            (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                            (__half*)(preln ? buf_0 : input_ptr),
+                            bsz_seq,
+                            input.size(2),
+                            new_stream);
             run_gemm_int4(aux_buff,
-                          attn_weights[0].data_ptr(),
-                          buf_1,
-                          (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                          q_scale3.data_ptr(),
-                          bsz1,
-                          out_size,
-                          input.size(2),
-                          bsz1,
-                          q_scale3.size(0),
-                          Context::Instance().GetCurrentStream());
+                    attn_weights[0].data_ptr(),
+                    buf_1,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    q_scale3.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale3.size(0),
+                    Context::Instance().GetCurrentStream());
         }
     } else {
         cublas_gemm_ex(cub_handle,
@@ -1888,7 +1887,7 @@ void TransformerEncoder(at::Tensor& input,
         buf_2, buf_0, bsz, num_heads, _seq_length, hidden_dim, new_stream, 1);
     if (q_int) {
         int out_size = attn_weights[1].size(0);
-        if (q_bits == 8 or q_bits == 4) {
+        if (q_bits == 8) {
             launch_act_quant((int8_t*)aux_buff,
                             (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                             (__half*)buf_2,
@@ -1908,7 +1907,6 @@ void TransformerEncoder(at::Tensor& input,
                     Context::Instance().GetCurrentStream());
         } else {
             assert(q_bits == 4);
-            std::cout << "attn_ow" << std::endl;
             launch_act_quant_int4((int8_t*)aux_buff,
                             (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
                             (__half*)buf_2,
@@ -1944,8 +1942,8 @@ void TransformerEncoder(at::Tensor& input,
 
     if (q_int) {
         int out_size = mlp_weights[0].size(0);
-        if (q_bits == 8 or q_bits == 4) {
-            launch_fused_residual_ln((int8_t*)aux_buff,
+        if (q_bits == 8) {
+            launch_fused_residual_ln_quant((int8_t*)aux_buff,
                                     (__half*)buf_4,
                                     (float*)((int8_t*)aux_buff + bsz1 * hidden_dim),
                                     (__half*)buf_1,
@@ -1988,33 +1986,36 @@ void TransformerEncoder(at::Tensor& input,
                     new_stream);
         } else {
             assert(q_bits == 4);
-            // std::cout << "mlp q_bits == 4" << std::endl;
-            run_quantize_int4((int8_t*)aux_buff,
-                              (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                              (__half*)buf_4,
-                              input.size(2),
-                              bsz_seq,
-                              new_stream);
-
+            launch_fused_residual_ln_quant_int4((int8_t*)aux_buff,
+                                    (__half*)buf_4,
+                                    (float*)((int8_t*)aux_buff + bsz1 * hidden_dim),
+                                    (__half*)buf_1,
+                                    (__half*)input_ptr,
+                                    (__half*)attn_biases[1].data_ptr(),
+                                    (__half*)attn_norm[0].data_ptr(),
+                                    (__half*)attn_norm[1].data_ptr(),
+                                    epsilon,
+                                    bsz_seq,
+                                    hidden_dim,
+                                    new_stream);
             run_gemm_int4(aux_buff,
-                          mlp_weights[0].data_ptr(),
-                          aux_buff1,
-                          (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
-                          q_scale1.data_ptr(),
-                          bsz1,
-                          out_size,
-                          input.size(2),
-                          bsz1,
-                          q_scale1.size(0),
-                          Context::Instance().GetCurrentStream());
-
-            launch_bias_gelu_int4((int8_t*)aux_buff,
-                                  (float*)((int8_t*)aux_buff + bsz1 * out_size),
-                                  (__half*)aux_buff1,
-                                  (__half*)mlp_biases[0].data_ptr(),
-                                  out_size,
-                                  bsz_seq,
-                                  Context::Instance().GetCurrentStream());
+                    mlp_weights[0].data_ptr(),
+                    aux_buff1,
+                    (float*)((int8_t*)aux_buff + bsz1 * input.size(2)),
+                    q_scale1.data_ptr(),
+                    bsz1,
+                    out_size,
+                    input.size(2),
+                    bsz1,
+                    q_scale1.size(0),
+                    new_stream);
+            launch_gelu_quant_int4((int8_t*)aux_buff,
+                            (float*)((int8_t*)aux_buff + bsz1 * out_size),
+                            (__half*)aux_buff1,
+                            (__half*)mlp_biases[0].data_ptr(),
+                            bsz_seq,
+                            out_size,
+                            new_stream);
             run_gemm_int4(aux_buff,
                           mlp_weights[1].data_ptr(),
                           (T*)buf_5,
@@ -2319,7 +2320,8 @@ void Encoder_mlp(at::Tensor& input,
                  int num_heads,
                  bool preln,
                  float epsilon,
-                 bool q_int8,
+                 bool q_int,
+                 unsigned q_bits,
                  bool enable_qkv_quantization,
                  at::Tensor& q_scale,
                  at::Tensor& q_scale1,
@@ -2373,7 +2375,7 @@ void Encoder_mlp(at::Tensor& input,
     float alpha = (T)1.0;
     float gemm_beta = (T)0.0;
 
-    if (q_int8) {
+    if (q_int) {
         int out_size = attn_weights.size(0);
         launch_act_quant((int8_t*)aux_buff,
                          (float*)((int8_t*)aux_buff + bsz1 * hidden_dim),
@@ -2407,9 +2409,9 @@ void Encoder_mlp(at::Tensor& input,
                        CUBLAS_GEMM_DEFAULT_TENSOR_OP);
     }
 
-    if (q_int8) {
+    if (q_int) {
         int out_size = mlp_weights[0].size(0);
-        launch_fused_residual_ln((int8_t*)aux_buff,
+        launch_fused_residual_ln_quant((int8_t*)aux_buff,
                                  (__half*)buf_4,
                                  (float*)((int8_t*)aux_buff + bsz1 * hidden_dim),
                                  (__half*)buf_1,
@@ -2491,7 +2493,7 @@ void Encoder_mlp(at::Tensor& input,
     }
     if (!preln) {
         if (enable_qkv_quantization)
-            launch_fused_residual_ln((int8_t*)aux_buff,
+            launch_fused_residual_ln_quant((int8_t*)aux_buff,
                                      (__half*)input_ptr,
                                      (float*)((int8_t*)aux_buff + bsz1 * hidden_dim),
                                      (__half*)buf_5,
