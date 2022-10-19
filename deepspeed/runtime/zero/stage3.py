@@ -153,13 +153,12 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
 
         #num of ranks in a ZeRO param partitioning group
         self.zero_param_group_size = zero_param_group_size
-        
+
         zpg = groups._get_zero_param_intra_parallel_group()
         print_rank_0(f"SAGE STAGE3 ZPG {self.zero_param_group_size} {zpg}", force=True)
         if self.zero_param_group_size > 1 and zpg is None:
             self._set_zero_group_parallelism()
             zpg = groups._get_zero_param_intra_parallel_group()
-
 
         self.parameter_offload = DeepSpeedZeRoOffload(
             module=module,
@@ -337,6 +336,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         self.averaged_gradients = {}
 
         #creates backward hooks for gradient partitioning
+        ###Calls all gather param
         self.create_reduce_and_remove_grad_hooks()
 
         #exit(0)
@@ -1045,8 +1045,11 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
             for param in param_group:
                 if param.requires_grad:
                     #print_rank_0(f" Before all gather {param.device}, {param.shape}")
+                    print_rank_0(f"SAGE Before all gather {param.device}, {param.shape}",
+                                 force=True)
 
                     # The hook must be created in un-partitioned parameter
+                    #print_rank_0(f"SAGE PARAM STAGE3 {param} p)
                     param.all_gather()
 
                     #print(f"After all gather {param.device}, {param.shape}")
@@ -1861,15 +1864,8 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
 
         if self.swap_optimizer:
             self.optimizer_swapper.log_timers()
-
-        ##Invalidate secondary partition
-        '''
-        if self.parameter_offload:
-            print_rank_0(f"INVALIDATE secondary partition",force=True)
-            self.parameter_offload.invalidate_secondary_partition()
-        '''
         self.log_timers(timer_names)
-       
+
         see_memory_usage('After zero_optimizer step', force=False)
         print_rank_0(f"------------------Finishing Step-----------------------")
 
