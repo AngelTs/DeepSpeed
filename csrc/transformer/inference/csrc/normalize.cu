@@ -1873,7 +1873,7 @@ __device__ void device_quantize(__half* local_buffer_h,
     for (int i = 0; i < UNROLL * act_quant::internal_unroll; i++) {
         if constexpr (q_bits == 8) {
             int8_t local_output[act_quant::h_per_load];
-            quant_16_bytes<act_quant::q_bits>(
+            quant_16_bytes<q_bits>(
                 local_output, local_buffer + i * act_quant::h2_per_load, q_scale);
             if (elem_offset + i * stride < elems_per_group) {
                 mem_access::store_global<act_quant::granularity / 2>(
@@ -1881,7 +1881,7 @@ __device__ void device_quantize(__half* local_buffer_h,
             }
         } else if constexpr (q_bits == 4) {
             int8_t local_output[act_quant::h_per_load/2];
-            quant_16_bytes<act_quant::q_bits>(
+            quant_16_bytes<q_bits>(
                 local_output, local_buffer + i * act_quant::h2_per_load, q_scale);
             if (elem_offset + i * stride < elems_per_group) {
                 mem_access::store_global<act_quant::granularity / 4>(
