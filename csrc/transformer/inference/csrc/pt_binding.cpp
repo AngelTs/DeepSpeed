@@ -2132,10 +2132,10 @@ std::vector<at::Tensor> ds_act_quant_int4(at::Tensor& input_vals, int groups)
                               .layout(at::kStrided)
                               .device(at::kCUDA)
                               .requires_grad(false);
-    int M = input_vals.size(0);
-    int K = input_vals.size(1);
+    //int M = input_vals.size(0);
+    //int K = input_vals.size(1);
 
-    auto output = torch::empty({M, K / 2}, output_options);
+    auto output = torch::empty({at::numel(input_vals) / 2}, output_options);
 
     const int elems_per_group = at::numel(input_vals) / groups;
 

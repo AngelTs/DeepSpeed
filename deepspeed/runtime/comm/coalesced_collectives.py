@@ -77,18 +77,20 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
     #print(f"this_rank is {this_rank}, global group index {inter_idx}\n")
     output_lst: List[Tensor] = [None] * len(tensors)
     for idx, tensor in enumerate(tensors):
-
+        flat_tensor = tensor.view(-1)
         # Intra-machine all-to-all
         #if this_rank == 0:
             #print(f"tensor idx is {idx}, tensor shape is {tensor.shape}")
         #input_tensor = list(tensor.chunk(local_world_size))
-        local_output = torch.empty_like(tensor.chunk(local_world_size)[0])
+        local_output = torch.empty_like(flat_tensor.chunk(local_world_size)[0])
         #reduce_scatter(local_output, input_tensor, group=groups[f'local_{intra_idx}'])
-        _torch_reduce_scatter_fn(tensor, local_output, group=groups[f'local_{intra_idx}'])
+        _torch_reduce_scatter_fn(flat_tensor, local_output, group=groups[f'local_{intra_idx}'])
 
         # Inter-machine all-to-all
         #local_output = local_output.chunk(2)[0]     
         #inter_quant_int8, inter_q_scales = quantizer_cuda_module.gh_quant_fp16(local_output, inter_quant_group)
+        #if local_output.dim()==1:
+            #local_output = local_output.view(-1,32)
         inter_quant_int8, inter_q_scales = quantizer_cuda_module.ds_act_quant_int4(local_output, inter_quant_group)
         inter_output_single = torch.empty_like(inter_quant_int8)
         inter_q_scale_out = torch.empty_like(inter_q_scales)

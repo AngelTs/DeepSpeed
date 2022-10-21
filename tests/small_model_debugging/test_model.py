@@ -12,7 +12,7 @@ import torch.nn.functional as F
 class SimpleModel(torch.nn.Module):
     def __init__(self, hidden_dim, empty_grad=False):
         super(SimpleModel, self).__init__()
-        self.linear = torch.nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.linear = torch.nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.linear = torch.nn.Linear(hidden_dim, hidden_dim, bias=False)
         #.linear = QuantizeLinear(hidden_dim, hidden_dim)
         if empty_grad:
