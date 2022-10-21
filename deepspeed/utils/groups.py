@@ -39,6 +39,9 @@ _WORLD_GROUP = None
 mpu = None
 # global object that stores tensor parallel world size for experts
 expert_tensor_parallel_world_size = 1
+# All to All quantized graident communication groups
+_ALL_TO_ALL_GROUP = {}
+SIM_INT4=False
 
 
 # Deprecated groups initialize function.
@@ -322,6 +325,39 @@ def _clone_world_group():
         _WORLD_GROUP = dist.new_group(ranks=range(dist.get_world_size()))
     return _WORLD_GROUP
 
+
+def _get_local_all_to_all_group():
+    assert dist.is_initialized(), \
+        'dist is not initialized'
+    global _ALL_TO_ALL_GROUP
+    global SIM_INT4
+    num_local = int(dist.get_world_size()/8)
+    _ALL_TO_ALL_GROUP['sim_int4']= SIM_INT4
+    if num_local == 0 and dist.get_world_size()>0:
+        assert  dist.get_world_size()>=1, \
+            'num_gpus must >=1, cannot initialize All-To-All'
+        cur_rank = []
+        for i in range(dist.get_world_size()):
+            cur_rank.append(i)
+        _ALL_TO_ALL_GROUP['local_0'] = dist.new_group(ranks=cur_rank)
+    elif num_local==1:
+        assert dist.get_world_size()==8, \
+            'num_gpus not equal to 8, cannot initialize All-To-All'
+        _ALL_TO_ALL_GROUP['local_0'] = dist.new_group(ranks=[0,1,2,3,4,5,6,7])
+    else:
+        assert dist.get_world_size()>8, \
+            'num_nodes<2 cannot initialize All-To-All'
+        for i in range(num_local):
+            local_rank = [0+8*i,1+8*i,2+8*i,3+8*i,4+8*i,5+8*i,6+8*i,7+8*i]
+            _ALL_TO_ALL_GROUP[f"local_{i}"] = dist.new_group(ranks=local_rank)
+        
+        for i in range(8):
+            cur_rank = []
+            for j in range(num_local):
+                cur_rank.append(i+j*8)
+            _ALL_TO_ALL_GROUP[f"global_{i}"] = dist.new_group(ranks=cur_rank)      
+ 
+    return _ALL_TO_ALL_GROUP
 
 def _get_data_parallel_group():
     """Get the data parallel group the caller rank belongs to."""
