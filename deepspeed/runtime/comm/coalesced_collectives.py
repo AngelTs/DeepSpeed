@@ -60,8 +60,7 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
     local_world_size = torch.cuda.device_count()
     global_world_size = dist.get_world_size()
     num_nodes = int(global_world_size / local_world_size)
-    intra_quant_group = 128
-    inter_quant_group = 128
+    inter_quant_group = 40960
     this_rank = dist.get_rank()
     #print(f"num_nodes is {num_nodes}, local_world_size is {local_world_size}, global_world_size is {global_world_size}, this_rank is {this_rank}\n")
     intra_idx = int(this_rank/local_world_size)

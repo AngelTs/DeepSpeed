@@ -142,15 +142,15 @@ __device__ __forceinline__ void quant_16_bytes(int8_t* local_output,
 
     } else if constexpr (q_bits == 4) {
 #pragma unroll
-        for (int i = 0; i < elems/2; i++) {
-            float data_f_1 = __half2float(data[2*i]) * scale;
-            float data_f_2 = __half2float(data[2*i+1]) * scale;
+        for (int i = 0; i < elems / 2; i++) {
+            float data_f_1 = __half2float(data[2 * i]) * scale;
+            float data_f_2 = __half2float(data[2 * i + 1]) * scale;
             int32_t data_i32_1 = __float2int_rn(data_f_1);
             int32_t data_i32_2 = __float2int_rn(data_f_2);
             int8_t data_i8_1 = (int8_t)min(max(data_i32_1, q_min), q_max);
             int8_t data_i8_2 = (int8_t)min(max(data_i32_2, q_min), q_max);
             auto data_i8 = int4x2_t{data_i8_2, data_i8_1};
-            local_output[i] =  *((int8_t*)(&data_i8));
+            local_output[i] = *((int8_t*)(&data_i8));
         }
     }
 }
@@ -180,7 +180,7 @@ __half2 h2_max(__half2 lhs, __half2 rhs)
 #endif
 }
 
-template <int UNROLL, int q_bits=8>
+template <int UNROLL, int q_bits = 8>
 __device__ void device_quantize(__half2* local_buffer,
                                 float* __restrict__ scales,
                                 int8_t* __restrict__ output_data,
@@ -223,14 +223,14 @@ __device__ void device_quantize(__half2* local_buffer,
                 int8_t local_output[act_quant::h_per_load];
                 quant_16_bytes<q_bits>(
                     local_output, local_buffer + i * act_quant::h2_per_load, q_scale);
-                mem_access::store_global<act_quant::granularity / 2>(output_data + base_offset + i * stride,
-                                                                 local_output);
+                mem_access::store_global<act_quant::granularity / 2>(
+                    output_data + base_offset + i * stride, local_output);
             } else if constexpr (q_bits == 4) {
-                int8_t local_output[act_quant::h_per_load/2];
+                int8_t local_output[act_quant::h_per_load / 2];
                 quant_16_bytes<q_bits>(
                     local_output, local_buffer + i * act_quant::h2_per_load, q_scale);
-                mem_access::store_global<act_quant::granularity / 4>(output_data + (base_offset + i * stride)/2,
-                                                                 local_output);
+                mem_access::store_global<act_quant::granularity / 4>(
+                    output_data + (base_offset + i * stride) / 2, local_output);
             }
         }
     }
@@ -598,11 +598,11 @@ int32_t round_to_32(int32_t raw_value) { return (((raw_value - 1) >> 5) + 1) << 
 
 template <int q_bits>
 void launch_act_quant_impl(int8_t* output_data,
-                      float* scales,
-                      const __half* input_data,
-                      int groups,
-                      int elems_per_group,
-                      cudaStream_t stream)
+                           float* scales,
+                           const __half* input_data,
+                           int groups,
+                           int elems_per_group,
+                           cudaStream_t stream)
 {
     // Scheduling concern: may be slightly faster for some inputs to assign multiple stages of
     // warp-sized blocks rather than stepping up to 64/96 threads
@@ -630,7 +630,32 @@ void launch_act_quant_impl(int8_t* output_data,
     } else if (external_unroll == 4) {
         // 12289 - 16384 elems
         LAUNCH_ACTIVATION_QUANT(4, q_bits);
+    } else if (external_unroll == 5) {
+        // - 20480 elems
+        LAUNCH_ACTIVATION_QUANT(5, q_bits);
+    } else if (external_unroll == 6) {
+        LAUNCH_ACTIVATION_QUANT(6, q_bits);
+    } else if (external_unroll == 7) {
+        LAUNCH_ACTIVATION_QUANT(7, q_bits);
+    } else if (external_unroll == 8) {
+        LAUNCH_ACTIVATION_QUANT(8, q_bits);
+    } else if (external_unroll == 9) {
+        LAUNCH_ACTIVATION_QUANT(9, q_bits);
+    } else if (external_unroll == 10) {
+        LAUNCH_ACTIVATION_QUANT(10, q_bits);
+    } else if (external_unroll == 11) {
+        LAUNCH_ACTIVATION_QUANT(11, q_bits);
+    } else if (external_unroll == 12) {
+        LAUNCH_ACTIVATION_QUANT(12, q_bits);
+    } else if (external_unroll == 13) {
+        LAUNCH_ACTIVATION_QUANT(13, q_bits);
+    } else if (external_unroll == 14) {
+        LAUNCH_ACTIVATION_QUANT(14, q_bits);
+    } else if (external_unroll == 15) {
+        // - 57344 elems
+        LAUNCH_ACTIVATION_QUANT(15, q_bits);
     }
+    
 }
 
 #define LAUNCH_GELU_QUANT(unroll_factor, q_bits)                                     \
@@ -639,12 +664,12 @@ void launch_act_quant_impl(int8_t* output_data,
 
 template <int q_bits>
 void launch_gelu_quant_impl(int8_t* output_data,
-                       float* scales,
-                       const __half* input_data,
-                       const __half* bias_data,
-                       int groups,
-                       int elems_per_group,
-                       cudaStream_t stream)
+                            float* scales,
+                            const __half* input_data,
+                            const __half* bias_data,
+                            int groups,
+                            int elems_per_group,
+                            cudaStream_t stream)
 {
     // Scheduling concern: may be slightly faster for some inputs to assign multiple stages of
     // warp-sized blocks rather than stepping up to 64/96 threads
@@ -771,35 +796,25 @@ void launch_ln_quant(int8_t* output_data,
     }
 }
 
-
 void launch_act_quant(int8_t* output_data,
                       float* scales,
                       const __half* input_data,
                       int groups,
                       int elems_per_group,
-                      cudaStream_t stream) {
-    launch_act_quant_impl<8>(output_data,
-                      scales,
-                      input_data,
-                      groups,
-                      elems_per_group,
-                      stream);
-                      }
+                      cudaStream_t stream)
+{
+    launch_act_quant_impl<8>(output_data, scales, input_data, groups, elems_per_group, stream);
+}
 
 void launch_act_quant_int4(int8_t* output_data,
-                      float* scales,
-                      const __half* input_data,
-                      int groups,
-                      int elems_per_group,
-                      cudaStream_t stream) {
-
-    launch_act_quant_impl<4>(output_data,
-                      scales,
-                      input_data,
-                      groups,
-                      elems_per_group,
-                      stream);
-                      }
+                           float* scales,
+                           const __half* input_data,
+                           int groups,
+                           int elems_per_group,
+                           cudaStream_t stream)
+{
+    launch_act_quant_impl<4>(output_data, scales, input_data, groups, elems_per_group, stream);
+}
 
 void launch_gelu_quant(int8_t* output_data,
                        float* scales,
@@ -807,28 +822,20 @@ void launch_gelu_quant(int8_t* output_data,
                        const __half* bias_data,
                        int groups,
                        int elems_per_group,
-                       cudaStream_t stream) {
-    launch_gelu_quant_impl<8>(output_data,
-                        scales,
-                        input_data,
-                        bias_data,
-                        groups,
-                        elems_per_group,
-                        stream);
-                       }
+                       cudaStream_t stream)
+{
+    launch_gelu_quant_impl<8>(
+        output_data, scales, input_data, bias_data, groups, elems_per_group, stream);
+}
 
 void launch_gelu_quant_int4(int8_t* output_data,
-                       float* scales,
-                       const __half* input_data,
-                       const __half* bias_data,
-                       int groups,
-                       int elems_per_group,
-                       cudaStream_t stream) {
-    launch_gelu_quant_impl<4>(output_data,
-                        scales,
-                        input_data,
-                        bias_data,
-                        groups,
-                        elems_per_group,
-                        stream);
-                       }
+                            float* scales,
+                            const __half* input_data,
+                            const __half* bias_data,
+                            int groups,
+                            int elems_per_group,
+                            cudaStream_t stream)
+{
+    launch_gelu_quant_impl<4>(
+        output_data, scales, input_data, bias_data, groups, elems_per_group, stream);
+}

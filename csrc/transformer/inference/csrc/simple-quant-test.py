@@ -7,7 +7,7 @@ quantizer_cuda_module = op_builder.InferenceBuilder().load()
 rows = 4096
 cols = 4096
 # Number of groups
-groups = 1024
+groups = 512
 
 input_tensor = torch.randn(rows, cols, dtype = torch.float16).cuda()
 #input_tensor = input_tensor.view(-1)
