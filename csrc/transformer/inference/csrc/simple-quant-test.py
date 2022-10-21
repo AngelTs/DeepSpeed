@@ -4,13 +4,13 @@ from deepspeed.ops import op_builder
 
 quantizer_cuda_module = op_builder.InferenceBuilder().load()
 
-rows = 8
-cols = 12 
+rows = 4096
+cols = 4096
 # Number of groups
-groups = 4
+groups = 1024
 
 input_tensor = torch.randn(rows, cols, dtype = torch.float16).cuda()
-input_tensor = input_tensor.view(-1)
+#input_tensor = input_tensor.view(-1)
 print(f"input tensor is {input_tensor}\n")
 test_tensor = input_tensor.clone().detach()
 

@@ -30,13 +30,6 @@ def _torch_reduce_scatter_fn(input_tensor: Tensor,
 @instrument_w_nvtx
 @torch.no_grad()
 def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
-    #print(f"===start all to all ===\n")
-    #group = groups['local_0']
-
-    #this_rank = dist.get_rank(group)
-    #world_sz = dist.get_world_size(group)
-    #print(f"this rank is {this_rank}, world_size is {world_sz}\n")
-    #world_sz=8
 
     # coalesced tensor
     '''
@@ -67,7 +60,7 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
     local_world_size = torch.cuda.device_count()
     global_world_size = dist.get_world_size()
     num_nodes = int(global_world_size / local_world_size)
-    #intra_quant_group = 128
+    intra_quant_group = 128
     inter_quant_group = 128
     this_rank = dist.get_rank()
     #print(f"num_nodes is {num_nodes}, local_world_size is {local_world_size}, global_world_size is {global_world_size}, this_rank is {this_rank}\n")
@@ -77,34 +70,38 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
     #print(f"this_rank is {this_rank}, global group index {inter_idx}\n")
     output_lst: List[Tensor] = [None] * len(tensors)
     for idx, tensor in enumerate(tensors):
-        flat_tensor = tensor.view(-1)
+        #flat_tensor = tensor.view(-1)
         # Intra-machine all-to-all
         #if this_rank == 0:
             #print(f"tensor idx is {idx}, tensor shape is {tensor.shape}")
         #input_tensor = list(tensor.chunk(local_world_size))
-        local_output = torch.empty_like(flat_tensor.chunk(local_world_size)[0])
+        local_output = torch.empty_like(tensor.chunk(local_world_size)[0])
         #reduce_scatter(local_output, input_tensor, group=groups[f'local_{intra_idx}'])
-        _torch_reduce_scatter_fn(flat_tensor, local_output, group=groups[f'local_{intra_idx}'])
-
+        _torch_reduce_scatter_fn(tensor, local_output, group=groups[f'local_{intra_idx}'])
+        #local_output1 = local_output/local_world_size
         # Inter-machine all-to-all
         #local_output = local_output.chunk(2)[0]     
         #inter_quant_int8, inter_q_scales = quantizer_cuda_module.gh_quant_fp16(local_output, inter_quant_group)
         #if local_output.dim()==1:
             #local_output = local_output.view(-1,32)
+        #print(f"local output is {local_output}\n")
         inter_quant_int8, inter_q_scales = quantizer_cuda_module.ds_act_quant_int4(local_output, inter_quant_group)
+        #print(f"inter_quant_int8 is {inter_quant_int8}, inter_q_scales is {inter_q_scales}\n")
         inter_output_single = torch.empty_like(inter_quant_int8)
         inter_q_scale_out = torch.empty_like(inter_q_scales)
 
         all_to_all_single(inter_output_single, inter_quant_int8, group=groups[f'global_{inter_idx}'])
         all_to_all_single(inter_q_scale_out, inter_q_scales, group = groups[f'global_{inter_idx}'])
-
-        #inter_dequant_fp16 = quantizer_cuda_module.gh_dequant_fp16(inter_output_single, inter_q_scale_out, inter_quant_group)
+        torch.cuda.synchronize()
         inter_dequant_fp16 = quantizer_cuda_module.ds_dequant_int4(inter_output_single, inter_q_scale_out, inter_quant_group)
-        output_lst[idx] = sum(list(inter_dequant_fp16.chunk(num_nodes)))/num_nodes
+        #if this_rank == 0:
+        #print(f"inter_dequant_fp16 is {inter_dequant_fp16}\n")
+        output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes)))/global_world_size).view(-1)
         
         #torch.cuda.synchronize()
         #if this_rank == 0:
-            #print(f"all_to_all len output is {len(output_lst)}, idx is {idx}, shape is {output_lst[idx].shape}\n")        
+            #print(f"all_to_all len output is {len(output_lst)}, idx is {idx}, shape is {output_lst[idx]}\n")
+
     return output_lst
 
 

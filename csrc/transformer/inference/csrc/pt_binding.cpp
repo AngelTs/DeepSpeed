@@ -2135,8 +2135,11 @@ std::vector<at::Tensor> ds_act_quant_int4(at::Tensor& input_vals, int groups)
     //int M = input_vals.size(0);
     //int K = input_vals.size(1);
 
-    auto output = torch::empty({at::numel(input_vals) / 2}, output_options);
-
+    //auto output = torch::empty({at::numel(input_vals) / 2}, output_options);
+    std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
+    sz[sz.size() - 1] = sz.back() /2;
+    auto output = torch::empty(sz, output_options);
+    
     const int elems_per_group = at::numel(input_vals) / groups;
 
     launch_act_quant_int4((int8_t*)output.data_ptr(),
@@ -2235,10 +2238,10 @@ at::Tensor ds_dequant_int4(at::Tensor& input_vals, at::Tensor& scales, int group
     auto total_elems = 2 * at::numel(input_vals);
     auto elems_per_group = total_elems / groups;
 
-    auto output = torch::empty({total_elems}, output_options);
-    // std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
-    // sz[sz.size() - 1] = sz.back() * 2;
-    // auto output = torch::empty(sz, output_options);
+    //auto output = torch::empty({total_elems}, output_options);
+    std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
+    sz[sz.size() - 1] = sz.back() * 2;
+    auto output = torch::empty(sz, output_options);
 
 
     launch_dequant_int4((__half*)output.data_ptr(),
