@@ -20,6 +20,12 @@ Copyright 2022 The Microsoft DeepSpeed Team
 #define SMs 80
 
 #define MAX_REGISTERS 256
+
+struct int4x2_t {
+    int8_t high : 4;
+    int8_t low : 4;
+};
+
 template <typename T>
 void launch_attn_softmax_v2(T* vals,
                             T* mask,
@@ -452,3 +458,10 @@ void launch_dequant(__half* output,
                     int elems_per_group,
                     int total_elems,
                     cudaStream_t stream);
+
+void launch_dequant_int4(__half* output,
+                         const int8_t* quantized_data,
+                         const float* scales,
+                         int elems_per_group,
+                         int total_elems,
+                         cudaStream_t stream);

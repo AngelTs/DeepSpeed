@@ -2225,6 +2225,31 @@ at::Tensor ds_dequant(at::Tensor& input_vals, at::Tensor& scales, int groups)
     return output;
 }
 
+at::Tensor ds_dequant_int4(at::Tensor& input_vals, at::Tensor& scales, int groups)
+{
+    auto output_options = at::TensorOptions()
+                              .dtype(at::kHalf)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+    auto total_elems = 2 * at::numel(input_vals);
+    auto elems_per_group = total_elems / groups;
+
+    auto output = torch::empty({total_elems}, output_options);
+    // std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
+    // sz[sz.size() - 1] = sz.back() * 2;
+    // auto output = torch::empty(sz, output_options);
+
+
+    launch_dequant_int4((__half*)output.data_ptr(),
+                   (int8_t*)input_vals.data_ptr(),
+                   (float*)scales.data_ptr(),
+                   elems_per_group,
+                   total_elems,
+                   at::cuda::getCurrentCUDAStream());
+    return output;
+}
+
 template <typename T>
 std::vector<at::Tensor> Encoder_QKV(at::Tensor& input,
                                     std::vector<at::Tensor>& input_norm,
@@ -2615,4 +2640,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("fused_ln", &fused_ln);
     m.def("fused_residual_ln", &fused_residual_ln);
     m.def("ds_dequant", &ds_dequant);
+    m.def("ds_dequant_int4", &ds_dequant_int4);
 }

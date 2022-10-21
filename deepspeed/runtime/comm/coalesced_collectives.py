@@ -3,7 +3,7 @@ bandwidth utilization"""
 
 import math
 from typing import List
-import time
+
 import torch
 from torch import Tensor
 from deepspeed import comm as dist
@@ -67,7 +67,7 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
     local_world_size = torch.cuda.device_count()
     global_world_size = dist.get_world_size()
     num_nodes = int(global_world_size / local_world_size)
-    intra_quant_group = 128
+    #intra_quant_group = 128
     inter_quant_group = 128
     this_rank = dist.get_rank()
     #print(f"num_nodes is {num_nodes}, local_world_size is {local_world_size}, global_world_size is {global_world_size}, this_rank is {this_rank}\n")
@@ -99,9 +99,9 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         all_to_all_single(inter_q_scale_out, inter_q_scales, group = groups[f'global_{inter_idx}'])
 
         #inter_dequant_fp16 = quantizer_cuda_module.gh_dequant_fp16(inter_output_single, inter_q_scale_out, inter_quant_group)
-        inter_dequant_fp16 = quantizer_cuda_module.ds_dequant(inter_output_single, inter_q_scale_out, inter_quant_group)
-        #output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes)))/num_nodes).view(-1)
-        output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes//2)))/(num_nodes//2)).view(-1)
+        inter_dequant_fp16 = quantizer_cuda_module.ds_dequant_int4(inter_output_single, inter_q_scale_out, inter_quant_group)
+        output_lst[idx] = sum(list(inter_dequant_fp16.chunk(num_nodes)))/num_nodes
+        
         #torch.cuda.synchronize()
         #if this_rank == 0:
             #print(f"all_to_all len output is {len(output_lst)}, idx is {idx}, shape is {output_lst[idx].shape}\n")        
