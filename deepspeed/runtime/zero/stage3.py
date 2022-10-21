@@ -1166,25 +1166,25 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                 g.div(self.gradient_predivide_factor) for g in full_grads_for_rank
             ]
 
-        torch.cuda.synchronize()
-        dist.barrier()
-        all2all_start = time.time()
+        #torch.cuda.synchronize()
+        #dist.barrier()
+        #all2all_start = time.time()
         grad_partitions_for_rank = all_to_all_quant_reduce(full_grads_for_rank, 
                                             self.all2all_process_group)
-        torch.cuda.synchronize()
-        dist.barrier()
-        all2all_end = time.time()
-        print(f"Guanhua elapsed_time for all-to-all is: {all2all_end - all2all_start}\n")
+        #torch.cuda.synchronize()
+        #dist.barrier()
+        #all2all_end = time.time()
+        #print(f"Guanhua elapsed_time for all-to-all is: {all2all_end - all2all_start}\n")
         #else:
-        torch.cuda.synchronize()
-        dist.barrier()
-        reduce_scatter_start = time.time()
-        grad_partitions_for_rank = reduce_scatter_coalesced(full_grads_for_rank, 
-                                                                self.dp_process_group)
-        torch.cuda.synchronize()
-        dist.barrier()
-        reduce_scatter_end = time.time()
-        print(f"Guanhua elapsed_time for reduce-scatter is: {reduce_scatter_end - reduce_scatter_start}\n")
+        #torch.cuda.synchronize()
+        #dist.barrier()
+        #reduce_scatter_start = time.time()
+        #grad_partitions_for_rank = reduce_scatter_coalesced(full_grads_for_rank, 
+        #                                                        self.dp_process_group)
+        #torch.cuda.synchronize()
+        #dist.barrier()
+        #reduce_scatter_end = time.time()
+        #print(f"Guanhua elapsed_time for reduce-scatter is: {reduce_scatter_end - reduce_scatter_start}\n")
 
         if self.postscale_gradients and self.gradient_predivide_factor != dist.get_world_size(
                 self.dp_process_group):
