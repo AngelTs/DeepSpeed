@@ -1766,11 +1766,6 @@ __device__ __forceinline__ float get_scale(cg::thread_block& tb,
     }
 }
 
-struct int4x2_t {
-    int8_t high : 4;
-    int8_t low : 4;
-};
-
 /*
 Quantization inner loop helper.
 */

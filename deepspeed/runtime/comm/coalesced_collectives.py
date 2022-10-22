@@ -59,8 +59,8 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
 
     local_world_size = torch.cuda.device_count()
     global_world_size = dist.get_world_size()
-    num_nodes = int(global_world_size / local_world_size)
-    inter_quant_group = 40960
+    num_nodes = global_world_size // local_world_size
+    #inter_quant_group = 256
     this_rank = dist.get_rank()
     #print(f"num_nodes is {num_nodes}, local_world_size is {local_world_size}, global_world_size is {global_world_size}, this_rank is {this_rank}\n")
     intra_idx = int(this_rank/local_world_size)
@@ -84,6 +84,10 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         #if local_output.dim()==1:
             #local_output = local_output.view(-1,32)
         #print(f"local output is {local_output}\n")
+        if local_output.dim() == 1:
+            inter_quant_group = 64
+        else:
+            inter_quant_group = local_output.shape[0]
         inter_quant_int8, inter_q_scales = quantizer_cuda_module.ds_act_quant_int4(local_output, inter_quant_group)
         #print(f"inter_quant_int8 is {inter_quant_int8}, inter_q_scales is {inter_q_scales}\n")
         inter_output_single = torch.empty_like(inter_quant_int8)
@@ -91,15 +95,15 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
 
         all_to_all_single(inter_output_single, inter_quant_int8, group=groups[f'global_{inter_idx}'])
         all_to_all_single(inter_q_scale_out, inter_q_scales, group = groups[f'global_{inter_idx}'])
-        torch.cuda.synchronize()
+        #torch.cuda.synchronize()
         inter_dequant_fp16 = quantizer_cuda_module.ds_dequant_int4(inter_output_single, inter_q_scale_out, inter_quant_group)
         #if this_rank == 0:
         #print(f"inter_dequant_fp16 is {inter_dequant_fp16}\n")
         output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes)))/global_world_size).view(-1)
         
         #torch.cuda.synchronize()
-        #if this_rank == 0:
-            #print(f"all_to_all len output is {len(output_lst)}, idx is {idx}, shape is {output_lst[idx]}\n")
+        if this_rank == 0:
+            print(f"all_to_all len output is {len(output_lst)}, idx is {idx}, shape is {output_lst[idx]}\n")
 
     return output_lst
 

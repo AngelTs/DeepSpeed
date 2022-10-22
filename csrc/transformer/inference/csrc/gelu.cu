@@ -534,11 +534,6 @@ __device__ void quantize_kernel_glue(float2* data,
     if (threadIdx.x == 0) q_scale_d[blockIdx.x] = 1 / q_scale;
 }
 
-struct int4x2_t {
-    int8_t high : 4;
-    int8_t low : 4;
-};
-
 __device__ void quantize_int4_kernel(float2* data,
                                      unsigned cnt,
                                      int8_t* output,
