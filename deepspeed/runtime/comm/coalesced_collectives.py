@@ -85,9 +85,9 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
             #local_output = local_output.view(-1,32)
         #print(f"local output is {local_output}\n")
         if local_output.dim() == 1:
-            inter_quant_group = 64
+            inter_quant_group = local_output.shape[0] // 64
         else:
-            inter_quant_group = local_output.shape[0]
+            inter_quant_group = max(local_output.shape[0], local_output.shape[1])
         inter_quant_int8, inter_q_scales = quantizer_cuda_module.ds_act_quant_int4(local_output, inter_quant_group)
         #print(f"inter_quant_int8 is {inter_quant_int8}, inter_q_scales is {inter_q_scales}\n")
         inter_output_single = torch.empty_like(inter_quant_int8)
@@ -102,8 +102,8 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes)))/global_world_size).view(-1)
         
         #torch.cuda.synchronize()
-        if this_rank == 0:
-            print(f"all_to_all len output is {len(output_lst)}, idx is {idx}, shape is {output_lst[idx]}\n")
+        #if this_rank == 0:
+            #print(f"local_output shape is {local_output.shape}, all_to_all len output is {len(output_lst)}, idx is {idx}, shape is {output_lst[idx].shape}, vals is {output_lst[idx]}\n")
 
     return output_lst
 
@@ -186,7 +186,7 @@ def reduce_scatter_coalesced(
 
         offset += padded_partition_sz_for_each_tensor[tensor_idx]
         #if this_rank == 0:
-            #print(f"reduce_scatter len output is {len(output_lst)}, idx is {tensor_idx}, shape is {output_lst[tensor_idx].shape}\n")
+            #print(f"reduce_scatter len output is {len(output_lst)}, idx is {tensor_idx}, vals is {output_lst[tensor_idx]}\n")
     return output_lst
 
     #if this_rank == 0:
