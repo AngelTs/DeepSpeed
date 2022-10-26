@@ -176,53 +176,61 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         '''
 
         # E8: Pipeline E6, E7
+        #if this_rank == 0:
+            #print(f"tensors len is {len(tensors)}, tensor shape is {tensor.shape}\n")
         s1 = torch.cuda.Stream()
         s2 = torch.cuda.Stream()
         event_1 = torch.cuda.Event(False, False, False)
         event_2 = torch.cuda.Event(False, False, False)
+        input_tensor1 = tensor.chunk(4)[0]
+        #if this_rank==0:
+            #print(f"intput_tensor1 is {input_tensor1}\n")
+        local_output1 = torch.empty_like(input_tensor1)
+        scales1 = torch.rand(tensor.shape[0]).cuda()
+        scale_output1 = torch.empty_like(scales1)
+        input_tensor2 = tensor.chunk(4)[1]
+        local_output2 = torch.empty_like(input_tensor2)
+        scales2 = torch.rand(tensor.shape[0]).cuda()
+        scale_output2 = torch.empty_like(scales2)
+
         # Intra comm on S1, records two different events
         with torch.cuda.stream(s1):
-            input_tensor1 = tensor.chunk(8)[0]
-            if this_rank==0:
-                print(f"intput_tensor1 shape is {input_tensor1.shape}\n")
-            local_output1 = torch.empty_like(input_tensor1)
-            scales1 = torch.rand(tensor.shape[0]).cuda()
-            scale_output1 = torch.empty_like(scales1)
             all_to_all_single(local_output1, input_tensor1, group=groups[f'local_{intra_idx}'], async_op=True)
             all_to_all_single(scale_output1, scales1, group=groups[f'local_{intra_idx}'], async_op=True)
         s1.record_event(event_1)
 
         with torch.cuda.stream(s1):
-            input_tensor2 = tensor.chunk(8)[1]
-            local_output2 = torch.empty_like(input_tensor2)
-            scales2 = torch.rand(tensor.shape[0]).cuda()
-            scale_output2 = torch.empty_like(scales2)
             all_to_all_single(local_output2, input_tensor2, group=groups[f'local_{intra_idx}'], async_op=True)
             all_to_all_single(scale_output2, scales2, group=groups[f'local_{intra_idx}'], async_op=True)
-        s1.record_event(event_2)        
+        s1.record_event(event_2)
+
         # Inter comm on S2, wait for two different events
         s2.wait_event(event_1)
+        global_input_tensor1 = local_output1.chunk(8)[0]
+        #if this_rank==0:
+            #print(f"global_intput_tensor1 shape is {global_input_tensor1}\n")
+        global_output1 = torch.empty_like(global_input_tensor1)
+        global_scales1 = scale_output1.chunk(8)[0].cuda()
+        global_scale_output1 = torch.empty_like(global_scales1)
+
         with torch.cuda.stream(s2):
-            global_input_tensor1 = local_output1.chunk(8)[0]
-            if this_rank==0:
-                print(f"global_intput_tensor1 shape is {global_input_tensor1.shape}\n")
-            global_output1 = torch.empty_like(global_input_tensor1)
-            global_scales1 = scale_output1.chunk(8)[0].cuda()
-            global_scale_output1 = torch.empty_like(global_scales1)
             all_to_all_single(global_output1, global_input_tensor1, group=groups[f'global_{inter_idx}'], async_op=True)
             all_to_all_single(global_scale_output1, global_scales1, group=groups[f'global_{inter_idx}'], async_op=True)
-        
+
+
         s2.wait_event(event_2)
+        global_input_tensor2 = local_output2.chunk(8)[0]
+        global_output2 = torch.empty_like(global_input_tensor2)
+        global_scales2 = scale_output2.chunk(8)[0].cuda()
+        global_scale_output2 = torch.empty_like(global_scales2)
+
         with torch.cuda.stream(s2):
-            global_input_tensor2 = local_output2.chunk(8)[0]
-            global_output2 = torch.empty_like(global_input_tensor2)
-            global_scales2 = scale_output2.chunk(8)[0].cuda()
-            global_scale_output2 = torch.empty_like(global_scales2)
             all_to_all_single(global_output2, global_input_tensor2, group=groups[f'global_{inter_idx}'], async_op=True)
             all_to_all_single(global_scale_output2, global_scales2, group=groups[f'global_{inter_idx}'], async_op=True)
         
         #s2.synchronize()
-
+        #if this_rank == 0:
+            #print(f"global_output1 is {global_output1}\n")
         '''
         # Intra-machine all-to-all
         #if this_rank == 0:
