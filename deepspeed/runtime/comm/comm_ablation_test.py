@@ -182,15 +182,16 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         s2 = torch.cuda.Stream()
         event_1 = torch.cuda.Event(False, False, False)
         event_2 = torch.cuda.Event(False, False, False)
-        input_tensor1 = tensor.chunk(4)[0]
+        intra_quant_group = max(tensor.shape[0], tensor.shape[1])
+        inter_quant_group = intra_quant_group // 8
+        intra_quant_int4, intra_q_scales = quantizer_cuda_module.ds_act_quant_int4(tensor, intra_quant_group)
+        input_tensor1, input_tensor2 = intra_quant_int4.chunk(2)
+        scales1, scales2 = intra_q_scales.chunk(2)
         #if this_rank==0:
             #print(f"intput_tensor1 is {input_tensor1}\n")
         local_output1 = torch.empty_like(input_tensor1)
-        scales1 = torch.rand(tensor.shape[0]).cuda()
         scale_output1 = torch.empty_like(scales1)
-        input_tensor2 = tensor.chunk(4)[1]
         local_output2 = torch.empty_like(input_tensor2)
-        scales2 = torch.rand(tensor.shape[0]).cuda()
         scale_output2 = torch.empty_like(scales2)
 
         # Intra comm on S1, records two different events
@@ -204,13 +205,16 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
             all_to_all_single(scale_output2, scales2, group=groups[f'local_{intra_idx}'], async_op=True)
         s1.record_event(event_2)
 
+
         # Inter comm on S2, wait for two different events
         s2.wait_event(event_1)
-        global_input_tensor1 = local_output1.chunk(8)[0]
+        intra_dequant1 = quantizer_cuda_module.ds_dequant_int4(local_output1, scale_output1, intra_quant_group//2)
+        intra_reduce1 = sum(list(intra_dequant1.chunk(local_world_size)))/local_world_size
+
+        global_input_tensor1, global_scales1 = quantizer_cuda_module.ds_act_quant_int4(intra_reduce1, inter_quant_group//2)
         #if this_rank==0:
             #print(f"global_intput_tensor1 shape is {global_input_tensor1}\n")
         global_output1 = torch.empty_like(global_input_tensor1)
-        global_scales1 = scale_output1.chunk(8)[0].cuda()
         global_scale_output1 = torch.empty_like(global_scales1)
 
         with torch.cuda.stream(s2):
@@ -219,18 +223,27 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
 
 
         s2.wait_event(event_2)
-        global_input_tensor2 = local_output2.chunk(8)[0]
+        intra_dequant2 = quantizer_cuda_module.ds_dequant_int4(local_output2, scale_output2, intra_quant_group//2)
+        intra_reduce2 = sum(list(intra_dequant2.chunk(local_world_size)))/local_world_size
+
+        global_input_tensor2, global_scales2 = quantizer_cuda_module.ds_act_quant_int4(intra_reduce2, inter_quant_group//2)
         global_output2 = torch.empty_like(global_input_tensor2)
-        global_scales2 = scale_output2.chunk(8)[0].cuda()
         global_scale_output2 = torch.empty_like(global_scales2)
 
         with torch.cuda.stream(s2):
             all_to_all_single(global_output2, global_input_tensor2, group=groups[f'global_{inter_idx}'], async_op=True)
             all_to_all_single(global_scale_output2, global_scales2, group=groups[f'global_{inter_idx}'], async_op=True)
         
-        #s2.synchronize()
+        s2.synchronize()
+
+        inter_output_single = torch.concat((global_output1, global_output2))
+        inter_q_scale_out = torch.concat((global_scale_output1, global_scale_output2))
+        inter_dequant_fp16 = quantizer_cuda_module.ds_dequant_int4(inter_output_single, inter_q_scale_out, inter_quant_group)
         #if this_rank == 0:
-            #print(f"global_output1 is {global_output1}\n")
+        #print(f"inter_dequant_fp16 is {inter_dequant_fp16}\n")
+        output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes)))/num_nodes).view(-1)
+        if this_rank == 0:
+            print(f"output idx is {idx}, shape is {output_lst[idx].shape}\n")
         '''
         # Intra-machine all-to-all
         #if this_rank == 0:
@@ -347,8 +360,8 @@ def reduce_scatter_coalesced(
             partition_lst_for_each_tensor[tensor_idx][this_rank].numel())
 
         offset += padded_partition_sz_for_each_tensor[tensor_idx]
-        #if this_rank == 0:
-            #print(f"reduce_scatter len output is {len(output_lst)}, idx is {tensor_idx}, vals is {output_lst[tensor_idx]}\n")
+        if this_rank == 0:
+            print(f"reduce_scatter len output is {len(output_lst)}, idx is {tensor_idx}, vals is {output_lst[tensor_idx].shape}\n")
     return output_lst
 
     #if this_rank == 0:
