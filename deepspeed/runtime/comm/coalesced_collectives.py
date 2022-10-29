@@ -176,12 +176,14 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         '''
 
         # E8: Pipeline E6, E7
-        
         s1 = torch.cuda.Stream()
         s2 = torch.cuda.Stream()
         event_1 = torch.cuda.Event(False, False, False)
         event_2 = torch.cuda.Event(False, False, False)
+        #tensor = tensor.t()
         intra_quant_group = max(tensor.shape[0], tensor.shape[1])
+        if tensor.dim()==1:
+            intra_quant_group = 64
         inter_quant_group = intra_quant_group // 8
         intra_quant_int4, intra_q_scales = quantizer_cuda_module.ds_act_quant_int4(tensor, intra_quant_group)
         input_tensor1, input_tensor2 = intra_quant_int4.chunk(2)
@@ -215,7 +217,7 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         #intra_1 = time.time()
         #print(f"Guanhua 1-half intra all-to-all is: {intra_1 - quant_2}\n")
         intra_dequant1 = quantizer_cuda_module.ds_dequant_int4(local_output1, scale_output1, intra_quant_group//2)
-        intra_reduce1 = sum(list(intra_dequant1.chunk(local_world_size)))/local_world_size
+        intra_reduce1 = sum(list(intra_dequant1.chunk(local_world_size)))
 
         global_input_tensor1, global_scales1 = quantizer_cuda_module.ds_act_quant_int4(intra_reduce1, inter_quant_group//2)
         #if this_rank==0:
@@ -225,10 +227,11 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         with torch.cuda.stream(s2):
             all_to_all_single(global_output1, global_input_tensor1, group=groups[f'global_{inter_idx}'], async_op=True)
             all_to_all_single(global_scale_output1, global_scales1, group=groups[f'global_{inter_idx}'], async_op=True)
+        #s2.record_event(event_3)
 
         s2.wait_event(event_2)
         intra_dequant2 = quantizer_cuda_module.ds_dequant_int4(local_output2, scale_output2, intra_quant_group//2)
-        intra_reduce2 = sum(list(intra_dequant2.chunk(local_world_size)))/local_world_size
+        intra_reduce2 = sum(list(intra_dequant2.chunk(local_world_size)))
 
         global_input_tensor2, global_scales2 = quantizer_cuda_module.ds_act_quant_int4(intra_reduce2, inter_quant_group//2)
         global_output2 = torch.empty_like(global_input_tensor2)
@@ -237,18 +240,18 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         with torch.cuda.stream(s2):
             all_to_all_single(global_output2, global_input_tensor2, group=groups[f'global_{inter_idx}'], async_op=True)
             all_to_all_single(global_scale_output2, global_scales2, group=groups[f'global_{inter_idx}'], async_op=True)
-        
-        s2.synchronize()
+        #s2.record_event(event_4)
         #torch.cuda.synchronize()
         #dist.barrier()
         #dequant_1 = time.time()
         #print(f"Guanhua inter all-to-all is: {dequant_1 - intra_1}\n")
+        s2.synchronize()
         inter_output_single = torch.concat((global_output1, global_output2))
         inter_q_scale_out = torch.concat((global_scale_output1, global_scale_output2))
-        inter_dequant_fp16 = quantizer_cuda_module.ds_dequant_int4(inter_output_single, inter_q_scale_out, inter_quant_group)
+        inter_dequant_fp16 = quantizer_cuda_module.ds_dequant_int4(inter_output_single, inter_q_scale_out, inter_quant_group)#.t()
         #if this_rank == 0:
         #print(f"inter_dequant_fp16 is {inter_dequant_fp16}\n")
-        output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes)))/num_nodes).view(-1)
+        output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes)))/global_world_size).view(-1)
         #torch.cuda.synchronize()
         #dist.barrier()
         #dequant_2 = time.time()
