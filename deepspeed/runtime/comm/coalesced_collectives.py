@@ -73,7 +73,8 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
 
         # E3 local-AA-INT4-Comm-only (M+scales)
         '''
-        input_tensor = tensor.chunk(2)[0]
+        input_tensor = tensor.chunk(4)[0]
+        #print(f"tensor shape is {input_tensor.shape}, element size is {input_tensor.element_size()}\n")
         local_output = torch.empty_like(input_tensor)
         scales = torch.rand(tensor.shape[0]).cuda()
         scale_output = torch.empty_like(scales)
@@ -88,7 +89,7 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
             intra_quant_group = max(tensor.shape[0], tensor.shape[1])  
 
         intra_quant_int4, intra_q_scales = quantizer_cuda_module.ds_act_quant_int4(tensor, intra_quant_group)
-        
+        print(f"intra_quiat_int4 shape is {intra_quant_int4.shape}, element size is {intra_quant_int4.element_size()}\n")
         local_output = torch.empty_like(intra_quant_int4)
         scale_output = torch.empty_like(intra_q_scales)
         all_to_all_single(local_output, intra_quant_int4, group=groups[f'local_{intra_idx}'])
@@ -176,6 +177,7 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         '''
 
         # E8: Pipeline E6, E7
+        
         s1 = torch.cuda.Stream()
         s2 = torch.cuda.Stream()
         event_1 = torch.cuda.Event(False, False, False)
@@ -259,8 +261,8 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         
         #if this_rank == 0:
             #print(f"output idx is {idx}, shape is {output_lst[idx].shape}\n")
-
-
+        
+        
         # E9: Pipeline Reduce-scatter, E7
         '''
         s1 = torch.cuda.Stream()
