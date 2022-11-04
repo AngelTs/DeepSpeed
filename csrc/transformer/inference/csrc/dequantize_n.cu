@@ -72,7 +72,7 @@ __global__ void dequant_reduce(int8_t* reduced_data,
     const int block_offset = tb.group_index().x * elems_per_out_group;
     const int elem_offset = tb.thread_index().x * elems_per_load;
     const int base_offset = block_offset + elem_offset;
-    const int stride = tb.group_dim().x;
+    const int stride = tb.group_dim().x * elems_per_load;
 
     __half2 local_buffer[totalChunks * storage_values];
 
