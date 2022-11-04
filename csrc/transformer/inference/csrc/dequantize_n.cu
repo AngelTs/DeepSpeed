@@ -12,6 +12,11 @@ const int threads = 256;
 
 using rop = reduce::OpType;
 
+struct PackedInt4 {
+    int8_t high : 4;
+    int8_t low : 4;
+};
+
 /*
 Modified from quantization utils, should be replaced
 */
@@ -26,7 +31,6 @@ DS_D_INLINE void quantize_chunk(int8_t* local_output, const __half2* data, float
 #pragma unroll
     for (int i = 0, oi = 0; i < elems; i += num_elems_packed, oi++) {
         if (num_elems_packed == 1) {
-            // TODO(cmikeh2): refactor to use conversion utils
             float data_f = conversion::to<float>(data[i]) * scale;
             int32_t data_i32 = conversion::to<int>(data_f);
             data_i32 = min(max(data_i32, q_min), q_max);
@@ -61,14 +65,14 @@ __global__ void dequant_reduce(int8_t* reduced_data,
     // NOTE(cmikeh2): This probably could be hardcoded to a larger number,
     // but that means even stronger restrictions on the number of elements per group
     // A performance analysis here might be beneficial
-    constexpr int mem_granularity = (q_bits == 8) ? 8 : 4;
-    constexpr int elems_per_load = load_granularity / sizeof(int8); // div by 1
+    constexpr int mem_granularity = (numBits == 8) ? 8 : 4;
+    constexpr int elems_per_load = mem_granularity / sizeof(int8_t); // div by 1
     constexpr int storage_values = 16 / sizeof(__half2);
 
     const int block_offset = tb.group_index().x * elems_per_out_group;
     const int elem_offset = tb.thread_index().x * elems_per_load;
     const int base_offset = block_offset + elem_offset;
-    const int stride = tb.dim_threads().x;
+    const int stride = tb.group_dim().x;
 
     __half2 local_buffer[totalChunks * storage_values];
 
