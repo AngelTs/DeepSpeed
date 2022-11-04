@@ -100,7 +100,8 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         '''
         # E4 global-AA-INT4(M/8)-Comm-only
         '''
-        input_tensor = tensor.chunk(16)[0]
+        input_tensor = tensor.chunk(32)[0]
+        print(f"tensor shape is {input_tensor.shape}, element size is {input_tensor.element_size()}\n")
         local_output = torch.empty_like(input_tensor)
         scales = torch.rand(tensor.shape[0]).chunk(8)[0].cuda()
         scale_output = torch.empty_like(scales)
@@ -116,7 +117,7 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
             inter_quant_group = max(input_tensor.shape[0], input_tensor.shape[1])  
 
         inter_quant_int4, inter_q_scales = quantizer_cuda_module.ds_act_quant_int4(input_tensor, inter_quant_group)
-        
+        #print(f"tensor shape is {inter_quant_int4.shape}, element size is {inter_quant_int4.element_size()}\n")
         global_output = torch.empty_like(inter_quant_int4)
         scale_output = torch.empty_like(inter_q_scales)
         all_to_all_single(global_output, inter_quant_int4, group=groups[f'global_{inter_idx}'])
