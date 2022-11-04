@@ -2253,6 +2253,41 @@ at::Tensor ds_dequant_int4(at::Tensor& input_vals, at::Tensor& scales, int group
     return output;
 }
 
+std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at::Tensor& input_scales, int in_groups, int out_groups)
+{
+    auto scales_options = at::TensorOptions()
+                              .dtype(at::kFloat)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+    auto scales = torch::empty({out_groups}, scales_options);
+
+    auto output_options = at::TensorOptions()
+                              .dtype(at::kChar)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+
+    std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
+    sz[sz.size() - 1] = sz.back()/8; //num of GPU per nodes
+    auto total_in_elems = at::numel(input_vals) * 2;
+    auto output = torch::empty(sz, output_options);
+    
+    const int elems_per_in_group = total_in_elems / in_groups;
+    const int elems_per_out_group = total_in_elems / (out_groups*8);
+
+    launch_dequant_reduce<4, 8>((int8_t*)output.data_ptr(),
+                                (float*)scales.data_ptr(),
+                                (int8_t*)input_vals.data_ptr(),
+                                out_groups,
+                                elems_per_out_group,
+                                total_in_elems,
+                                in_groups,
+                                elems_per_in_group,
+                                at::cuda::getCurrentCUDAStream());
+    return {output, scales};
+}
+
 template <typename T>
 std::vector<at::Tensor> Encoder_QKV(at::Tensor& input,
                                     std::vector<at::Tensor>& input_norm,
@@ -2644,4 +2679,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("fused_residual_ln", &fused_residual_ln);
     m.def("ds_dequant", &ds_dequant);
     m.def("ds_dequant_int4", &ds_dequant_int4);
+    m.def("ds_dequant_reduce_quant_int4", &ds_dequant_reduce_quant_int4);
 }
