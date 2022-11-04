@@ -2279,6 +2279,7 @@ std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at:
     launch_dequant_reduce<4, 8>((int8_t*)output.data_ptr(),
                                 (float*)scales.data_ptr(),
                                 (int8_t*)input_vals.data_ptr(),
+                                (float*)input_scales.data_ptr(),
                                 out_groups,
                                 elems_per_out_group,
                                 total_in_elems,
