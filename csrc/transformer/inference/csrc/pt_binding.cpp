@@ -2270,10 +2270,10 @@ std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at:
 
     std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
     sz[sz.size() - 1] = sz.back()/8; //num of GPU per nodes
-    const int elems_per_in_tensor = at::numel(input_vals) * 2 / 8;
+    const int elems_per_in_tensor = at::numel(input_vals) / 8;
     auto output = torch::empty(sz, output_options);
 
-    const int elems_per_in_group = elems_per_in_tensor / in_groups;
+    const int elems_per_in_group = elems_per_in_tensor / (in_groups / 8);
     const int elems_per_out_group = elems_per_in_tensor / out_groups;
 
     launch_dequant_reduce((int8_t*)output.data_ptr(),
@@ -2285,7 +2285,7 @@ std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at:
                           out_groups,
                           elems_per_out_group,
                           elems_per_in_tensor,
-                          in_groups,
+                          in_groups / 8,
                           elems_per_in_group,
                           at::cuda::getCurrentCUDAStream());
     return {output, scales};

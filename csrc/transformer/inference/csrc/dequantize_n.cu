@@ -38,8 +38,8 @@ DS_D_INLINE void quantize_chunk(int8_t* local_output, const __half2* data, float
             data_i32 = min(max(data_i32, q_min), q_max);
             local_output[i] = (int8_t)data_i32;
         } else if (num_elems_packed == 2) {
-            float data_f_1 = conversion::to<float>(data_h[2 * i]) * scale;
-            float data_f_2 = conversion::to<float>(data_h[2 * i + 1]) * scale;
+            float data_f_1 = conversion::to<float>(data_h[i]) * scale;
+            float data_f_2 = conversion::to<float>(data_h[i + 1]) * scale;
             int32_t data_i32_1 = conversion::to<int32_t>(data_f_1);
             int32_t data_i32_2 = conversion::to<int32_t>(data_f_2);
             int8_t data_i8_1 = (int8_t)min(max(data_i32_1, q_min), q_max);
@@ -91,7 +91,7 @@ __global__ void dequant_reduce(int8_t* reduced_data,
 
         const int iter_offset = i * stride + base_offset;
         const int iter_scale_idx = iter_offset / elems_per_in_group;
-        bool do_loads = iter_offset < elems_per_out_group;
+        bool do_loads = i * stride + elem_offset < elems_per_out_group;
 
 #pragma unroll
         for (int j = 0; j < numTensors; j++) {
@@ -135,23 +135,18 @@ __global__ void dequant_reduce(int8_t* reduced_data,
     reduce::block<rop::Max>(tb, warp, max);
 
     // We add an extra scaling factor here to perform the averaging reduction.
-    const float scale = (1 << numBits) / (2 * max * numTensors);
-    if (tb.thread_index().x == 0) reduced_scales[tb.group_index().x];
+    const float scale = (1 << numBits) / (2 * (max / numTensors));
+    if (tb.thread_index().x == 0) reduced_scales[tb.group_index().x] = 1 / scale;
 
 #pragma unroll
     for (int i = 0; i < totalChunks; i++) {
         const int iter_offset = i * stride + base_offset;
-        if (iter_offset < elems_per_out_group) {
+        if (i * stride + elem_offset < elems_per_out_group) {
             int8_t local_output[elems_per_load];
             quantize_chunk<numBits>(
-                local_output, local_buffer + i * storage_values, scale);
-            if constexpr (numBits == 8) {
-                mem_access::store_global<mem_granularity>(
-                    reduced_data + base_offset + i * stride, local_output);
-            } else if constexpr (numBits == 4) {
-                mem_access::store_global<mem_granularity>(
-                    reduced_data + (base_offset + i * stride) / 2, local_output);
-            }
+                local_output, local_buffer + i * storage_values, scale / numTensors);
+            mem_access::store_global<mem_granularity>(
+                reduced_data + iter_offset, local_output);
         }
     }
 }
@@ -182,8 +177,9 @@ void launch_dequant_reduce_impl(int8_t* reduced_data,
                                 int elems_per_in_group,
                                 cudaStream_t stream)
 {
-    constexpr int elems_per_thread = 8;
-    const int one_step_threads = pow2_round<5>(elems_per_out_group + elems_per_thread - 1) / (elems_per_thread);
+    // This is a coincidence. This is derived by 8 halves per 16 bytes with 2-way packing for int4
+    constexpr int elems_per_thread = numBits;
+    const int one_step_threads = pow2_round<5>((elems_per_out_group + elems_per_thread - 1) / (elems_per_thread));
     // TODO(cmikeh2): Tune this
     const int threads = (one_step_threads < 512) ? one_step_threads: 512;
 
@@ -251,13 +247,13 @@ void launch_dequant_reduce(int8_t* reduced_data,
                            cudaStream_t stream)
 {
     if (num_bits == 4 && num_gpus == 4) {
-        LAUNCH_DEQUANT_REDUCE_IMPL(4, 4);
+        //LAUNCH_DEQUANT_REDUCE_IMPL(4, 4);
     } else if (num_bits == 4 && num_gpus == 8) {
         LAUNCH_DEQUANT_REDUCE_IMPL(4, 8);
     } else if (num_bits == 8 && num_gpus == 4) {
-        LAUNCH_DEQUANT_REDUCE_IMPL(8, 4);
+       // LAUNCH_DEQUANT_REDUCE_IMPL(8, 4);
     } else if (num_bits == 8 && num_gpus == 8) {
-        LAUNCH_DEQUANT_REDUCE_IMPL(8, 8);
+        //LAUNCH_DEQUANT_REDUCE_IMPL(8, 8);
     }
 }
 
