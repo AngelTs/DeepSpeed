@@ -2139,7 +2139,7 @@ std::vector<at::Tensor> ds_act_quant_int4(at::Tensor& input_vals, int groups)
     std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
     sz[sz.size() - 1] = sz.back() /2;
     auto output = torch::empty(sz, output_options);
-    
+
     const int elems_per_group = at::numel(input_vals) / groups;
 
     launch_act_quant_int4((int8_t*)output.data_ptr(),
@@ -2270,19 +2270,19 @@ std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at:
 
     std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
     sz[sz.size() - 1] = sz.back()/8; //num of GPU per nodes
-    auto total_in_elems = at::numel(input_vals) * 2;
+    const int elems_per_in_tensor = at::numel(input_vals) * 2 / 8;
     auto output = torch::empty(sz, output_options);
-    
-    const int elems_per_in_group = total_in_elems / in_groups;
-    const int elems_per_out_group = total_in_elems / (out_groups*8);
+
+    const int elems_per_in_group = elems_per_in_tensor / in_groups;
+    const int elems_per_out_group = elems_per_in_tensor / out_groups;
 
     launch_dequant_reduce<4, 8>((int8_t*)output.data_ptr(),
                                 (float*)scales.data_ptr(),
-                                (int8_t*)input_vals.data_ptr(),
-                                (float*)input_scales.data_ptr(),
+                                (const int8_t*)input_vals.data_ptr(),
+                                (const float*)input_scales.data_ptr(),
                                 out_groups,
                                 elems_per_out_group,
-                                total_in_elems,
+                                elems_per_in_tensor,
                                 in_groups,
                                 elems_per_in_group,
                                 at::cuda::getCurrentCUDAStream());

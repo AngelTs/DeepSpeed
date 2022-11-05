@@ -10,7 +10,7 @@ const int elems_per_store = store_granularity / sizeof(__half);
 const int threads = 256;
 }  // namespace dequant
 
-using rop = reduce::OpType;
+using rop = reduce::ROpType;
 
 struct PackedInt4 {
     int8_t high : 4;
@@ -76,15 +76,15 @@ __global__ void dequant_reduce(int8_t* reduced_data,
 
     __half2 local_buffer[totalChunks * storage_values];
 
-    __half2 max_h2 = reduce::init<rop::Max>();
+    __half2 max_h2 = reduce::init<rop::Max, __half2>();
 
 #pragma unroll
     for (int i = 0; i < totalChunks; i++) {
-        __half * iteration_buffer = local_buffer + i * storage_values;
+        __half2 * iteration_buffer = local_buffer + i * storage_values;
 
 #pragma unroll
         for (int j = 0; j < storage_values; j++) {
-            iteration_buffer[j] = reduce::init<rop::Add>();
+            iteration_buffer[j] = reduce::init<rop::Add, __half2>();
         }
 
         const int iter_offset = i * stride + base_offset;
@@ -104,17 +104,17 @@ __global__ void dequant_reduce(int8_t* reduced_data,
 
                 // Dequantize
                 for (int k = 0; k < storage_values; k++) {
-                    if constexpr (q_bits == 8) {
+                    if constexpr (numBits == 8) {
                         float2 raw_val;
                         raw_val.x = conversion::to<float>(load_buffer[2 * k]) * scale;
                         raw_val.y = conversion::to<float>(load_buffer[2 * k + 1]) * scale;
-                        __half2 dequant_data = conversion::to<__half2>(raw_val)
+                        __half2 dequant_data = conversion::to<__half2>(raw_val);
                         iteration_buffer[k] = reduce::element<rop::Add>(iteration_buffer[k], dequant_data);
                     } else {
                         auto data = *(int4x2_t*)(&load_buffer[k]);
                         float2 raw_val;
-                        float raw_val.x = scale * conversion::to<float>(data.low);
-                        float raw_val.y = scale * conversion::to<float>(data.high);
+                        raw_val.x = scale * conversion::to<float>(data.low);
+                        raw_val.y = scale * conversion::to<float>(data.high);
                         __half2 dequant_data = conversion::to<__half2>(raw_val);
                         iteration_buffer[k] = reduce::element<rop::Add>(iteration_buffer[k], dequant_data);
                     }
@@ -128,13 +128,13 @@ __global__ void dequant_reduce(int8_t* reduced_data,
         }
     }
 
-    const __half max_h = reduce::element<rop::Max(max_h2.x, max_h2.y);
+    const __half max_h = reduce::element<rop::Max>(max_h2.x, max_h2.y);
     float max = conversion::to<float>(max_h);
     reduce::block<rop::Max>(tb, warp, max);
 
     // We add an extra scaling factor here to perform the averaging reduction.
     const float scale = (1 << numBits) / (2 * max * numTensors);
-    if (tb.thread_index().x == 0) scales[tb.group_index().x]
+    if (tb.thread_index().x == 0) reduced_scales[tb.group_index().x];
 
 #pragma unroll
     for (int i = 0; i < totalChunks; i++) {
@@ -143,12 +143,12 @@ __global__ void dequant_reduce(int8_t* reduced_data,
             int8_t local_output[elems_per_load];
             quantize_chunk<numBits>(
                 local_output, local_buffer + i * storage_values, scale);
-            if constexpr (q_bits == 8) {
+            if constexpr (numBits == 8) {
                 mem_access::store_global<mem_granularity>(
-                    output_data + base_offset + i * stride, local_output);
-            } else if constexpr (q_bits == 4) {
+                    reduced_data + base_offset + i * stride, local_output);
+            } else if constexpr (numBits == 4) {
                 mem_access::store_global<mem_granularity>(
-                    output_data + (base_offset + i * stride) / 2, local_output);
+                    reduced_data + (base_offset + i * stride) / 2, local_output);
             }
         }
     }
@@ -158,7 +158,7 @@ template <int Power>
 int32_t pow2_round(int32_t raw_value) { return (((raw_value - 1) >> Power) + 1) << Power; }
 
 #define LAUNCH_DEQUANT_REDUCE(num_chunks) \
-    activation_quantization<numBits, numTensors, num_chunks>    \
+    dequant_reduce<numBits, numTensors, num_chunks>             \
         <<<grid, block, 0, stream>>>(reduced_data,              \
                                      reduced_scales,            \
                                      input_data,                \
@@ -177,7 +177,8 @@ void launch_dequant_reduce(int8_t* reduced_data,
                            int elems_per_out_group,
                            int elems_per_in_tensor,
                            int groups_per_in_tensor,
-                           int elems_per_in_group)
+                           int elems_per_in_group,
+                           cudaStream_t stream)
 {
     constexpr int elems_per_thread = 8;
     const int one_step_threads = pow2_round<5>(elems_per_out_group + elems_per_thread - 1) / (elems_per_thread);
@@ -185,10 +186,10 @@ void launch_dequant_reduce(int8_t* reduced_data,
     const int threads = (one_step_threads < 512) ? one_step_threads: 512;
 
     dim3 block(threads);
-    dim3 grid(groups);
+    dim3 grid(out_groups);
 
     const int elems_per_step = threads * elems_per_thread;
-    const int unroll_raw = (elems_per_group + elems_per_step - 1) / elems_per_step;
+    const int unroll_raw = (elems_per_out_group + elems_per_step - 1) / elems_per_step;
 
     const int unroll = (unroll_raw >= 4) ? pow2_round<1>(unroll_raw) : unroll_raw;
 
@@ -231,7 +232,8 @@ void launch_dequant_reduce<4, 8>(int8_t* reduced_data,
                                  int elems_per_out_group,
                                  int elems_per_in_tensor,
                                  int groups_per_in_tensor,
-                                 int elems_per_in_group);
+                                 int elems_per_in_group,
+                                 cudaStream_t stream);
 
 template <>
 void launch_dequant_reduce<8, 8>(int8_t* reduced_data,
@@ -242,7 +244,8 @@ void launch_dequant_reduce<8, 8>(int8_t* reduced_data,
                                  int elems_per_out_group,
                                  int elems_per_in_tensor,
                                  int groups_per_in_tensor,
-                                 int elems_per_in_group);
+                                 int elems_per_in_group,
+                                 cudaStream_t stream);
 
 template <>
 void launch_dequant_reduce<4, 4>(int8_t* reduced_data,
@@ -253,7 +256,8 @@ void launch_dequant_reduce<4, 4>(int8_t* reduced_data,
                                  int elems_per_out_group,
                                  int elems_per_in_tensor,
                                  int groups_per_in_tensor,
-                                 int elems_per_in_group);
+                                 int elems_per_in_group,
+                                 cudaStream_t stream);
 
 template <>
 void launch_dequant_reduce<8, 4>(int8_t* reduced_data,
@@ -264,7 +268,8 @@ void launch_dequant_reduce<8, 4>(int8_t* reduced_data,
                                  int elems_per_out_group,
                                  int elems_per_in_tensor,
                                  int groups_per_in_tensor,
-                                 int elems_per_in_group);
+                                 int elems_per_in_group,
+                                 cudaStream_t stream);
 
 template <int q_bits>
 __global__ void dequantization(__half* output,
