@@ -181,7 +181,7 @@ void launch_dequant_reduce_impl(int8_t* reduced_data,
     constexpr int elems_per_thread = numBits;
     const int one_step_threads = pow2_round<5>((elems_per_out_group + elems_per_thread - 1) / (elems_per_thread));
     // TODO(cmikeh2): Tune this
-    const int threads = (one_step_threads < 512) ? one_step_threads: 512;
+    const int threads = (one_step_threads < 1024) ? one_step_threads: 1024;
 
     dim3 block(threads);
     dim3 grid(out_groups);
@@ -207,7 +207,7 @@ void launch_dequant_reduce_impl(int8_t* reduced_data,
         LAUNCH_DEQUANT_REDUCE(8);
     } else if (unroll == 10) {
         LAUNCH_DEQUANT_REDUCE(10);
-    } else if (unroll == 12) {
+    } /*else if (unroll == 12) {
         LAUNCH_DEQUANT_REDUCE(12);
     } else if (unroll == 14) {
         LAUNCH_DEQUANT_REDUCE(14);
@@ -218,7 +218,7 @@ void launch_dequant_reduce_impl(int8_t* reduced_data,
     } else if (unroll == 20) {
         // 80k maximum
         LAUNCH_DEQUANT_REDUCE(20);
-    }
+    }*/
 }
 
 #define LAUNCH_DEQUANT_REDUCE_IMPL(NUM_BITS, NUM_GPUS)                  \
