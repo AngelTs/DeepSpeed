@@ -28,16 +28,18 @@ DS_D_INLINE void quantize_chunk(int8_t* local_output, const __half2* data, float
     constexpr int32_t q_min = -(1 << (numBits - 1));
     constexpr int32_t q_max = (1 << (numBits - 1)) - 1;
 
+    const __half* data_h = reinterpret_cast<const __half*>(data);
+
 #pragma unroll
     for (int i = 0, oi = 0; i < elems; i += num_elems_packed, oi++) {
         if (num_elems_packed == 1) {
-            float data_f = conversion::to<float>(data[i]) * scale;
+            float data_f = conversion::to<float>(data_h[i]) * scale;
             int32_t data_i32 = conversion::to<int>(data_f);
             data_i32 = min(max(data_i32, q_min), q_max);
             local_output[i] = (int8_t)data_i32;
         } else if (num_elems_packed == 2) {
-            float data_f_1 = conversion::to<float>(data[2 * i]) * scale;
-            float data_f_2 = conversion::to<float>(data[2 * i + 1]) * scale;
+            float data_f_1 = conversion::to<float>(data_h[2 * i]) * scale;
+            float data_f_2 = conversion::to<float>(data_h[2 * i + 1]) * scale;
             int32_t data_i32_1 = conversion::to<int32_t>(data_f_1);
             int32_t data_i32_2 = conversion::to<int32_t>(data_f_2);
             int8_t data_i8_1 = (int8_t)min(max(data_i32_1, q_min), q_max);
@@ -169,16 +171,16 @@ int32_t pow2_round(int32_t raw_value) { return (((raw_value - 1) >> Power) + 1) 
                                      elems_per_in_group);
 
 template <int numBits, int numTensors>
-void launch_dequant_reduce(int8_t* reduced_data,
-                           float* reduced_scales,
-                           const int8_t* input_data,
-                           const float* input_scales,
-                           int out_groups,
-                           int elems_per_out_group,
-                           int elems_per_in_tensor,
-                           int groups_per_in_tensor,
-                           int elems_per_in_group,
-                           cudaStream_t stream)
+void launch_dequant_reduce_impl(int8_t* reduced_data,
+                                float* reduced_scales,
+                                const int8_t* input_data,
+                                const float* input_scales,
+                                int out_groups,
+                                int elems_per_out_group,
+                                int elems_per_in_tensor,
+                                int groups_per_in_tensor,
+                                int elems_per_in_group,
+                                cudaStream_t stream)
 {
     constexpr int elems_per_thread = 8;
     const int one_step_threads = pow2_round<5>(elems_per_out_group + elems_per_thread - 1) / (elems_per_thread);
@@ -223,53 +225,41 @@ void launch_dequant_reduce(int8_t* reduced_data,
     }
 }
 
-template <>
-void launch_dequant_reduce<4, 8>(int8_t* reduced_data,
-                                 float* reduced_scales,
-                                 const int8_t* input_data,
-                                 const float* input_scales,
-                                 int out_groups,
-                                 int elems_per_out_group,
-                                 int elems_per_in_tensor,
-                                 int groups_per_in_tensor,
-                                 int elems_per_in_group,
-                                 cudaStream_t stream);
+#define LAUNCH_DEQUANT_REDUCE_IMPL(NUM_BITS, NUM_GPUS)                  \
+    launch_dequant_reduce_impl<NUM_BITS, NUM_GPUS>(reduced_data,             \
+                                                   reduced_scales,           \
+                                                   input_data,               \
+                                                   input_scales,             \
+                                                   out_groups,               \
+                                                   elems_per_out_group,      \
+                                                   elems_per_in_tensor,      \
+                                                   groups_per_in_tensor,     \
+                                                   elems_per_in_group,       \
+                                                   stream);
 
-template <>
-void launch_dequant_reduce<8, 8>(int8_t* reduced_data,
-                                 float* reduced_scales,
-                                 const int8_t* input_data,
-                                 const float* input_scales,
-                                 int out_groups,
-                                 int elems_per_out_group,
-                                 int elems_per_in_tensor,
-                                 int groups_per_in_tensor,
-                                 int elems_per_in_group,
-                                 cudaStream_t stream);
-
-template <>
-void launch_dequant_reduce<4, 4>(int8_t* reduced_data,
-                                 float* reduced_scales,
-                                 const int8_t* input_data,
-                                 const float* input_scales,
-                                 int out_groups,
-                                 int elems_per_out_group,
-                                 int elems_per_in_tensor,
-                                 int groups_per_in_tensor,
-                                 int elems_per_in_group,
-                                 cudaStream_t stream);
-
-template <>
-void launch_dequant_reduce<8, 4>(int8_t* reduced_data,
-                                 float* reduced_scales,
-                                 const int8_t* input_data,
-                                 const float* input_scales,
-                                 int out_groups,
-                                 int elems_per_out_group,
-                                 int elems_per_in_tensor,
-                                 int groups_per_in_tensor,
-                                 int elems_per_in_group,
-                                 cudaStream_t stream);
+void launch_dequant_reduce(int8_t* reduced_data,
+                           float* reduced_scales,
+                           const int8_t* input_data,
+                           const float* input_scales,
+                           int num_gpus,
+                           int num_bits,
+                           int out_groups,
+                           int elems_per_out_group,
+                           int elems_per_in_tensor,
+                           int groups_per_in_tensor,
+                           int elems_per_in_group,
+                           cudaStream_t stream)
+{
+    if (num_bits == 4 && num_gpus == 4) {
+        LAUNCH_DEQUANT_REDUCE_IMPL(4, 4);
+    } else if (num_bits == 4 && num_gpus == 8) {
+        LAUNCH_DEQUANT_REDUCE_IMPL(4, 8);
+    } else if (num_bits == 8 && num_gpus == 4) {
+        LAUNCH_DEQUANT_REDUCE_IMPL(8, 4);
+    } else if (num_bits == 8 && num_gpus == 8) {
+        LAUNCH_DEQUANT_REDUCE_IMPL(8, 8);
+    }
+}
 
 template <int q_bits>
 __global__ void dequantization(__half* output,

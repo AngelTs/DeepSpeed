@@ -466,11 +466,12 @@ void launch_dequant_int4(__half* output,
                          int total_elems,
                          cudaStream_t stream);
 
-template <int numBits, int numTensors>
 void launch_dequant_reduce(int8_t* reduced_data,
                            float* reduced_scales,
                            const int8_t* input_data,
                            const float* input_scales,
+                           int num_gpus,
+                           int num_bits,
                            int out_groups,
                            int elems_per_out_group,
                            int elems_per_in_tensor,

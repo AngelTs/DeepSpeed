@@ -2276,16 +2276,18 @@ std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at:
     const int elems_per_in_group = elems_per_in_tensor / in_groups;
     const int elems_per_out_group = elems_per_in_tensor / out_groups;
 
-    launch_dequant_reduce<4, 8>((int8_t*)output.data_ptr(),
-                                (float*)scales.data_ptr(),
-                                (const int8_t*)input_vals.data_ptr(),
-                                (const float*)input_scales.data_ptr(),
-                                out_groups,
-                                elems_per_out_group,
-                                elems_per_in_tensor,
-                                in_groups,
-                                elems_per_in_group,
-                                at::cuda::getCurrentCUDAStream());
+    launch_dequant_reduce((int8_t*)output.data_ptr(),
+                          (float*)scales.data_ptr(),
+                          (const int8_t*)input_vals.data_ptr(),
+                          (const float*)input_scales.data_ptr(),
+                          8,
+                          4,
+                          out_groups,
+                          elems_per_out_group,
+                          elems_per_in_tensor,
+                          in_groups,
+                          elems_per_in_group,
+                          at::cuda::getCurrentCUDAStream());
     return {output, scales};
 }
 
