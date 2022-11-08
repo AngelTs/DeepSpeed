@@ -159,6 +159,37 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         all_to_all_single(local_output2, input_tensor2, group=groups[f'local_{intra_idx}'])
         all_to_all_single(scale_output2, scales2, group=groups[f'local_{intra_idx}'])
         '''
+        # E6: 4x E3(M/4)
+        '''
+        input_tensor1 = tensor.chunk(16)[0]
+        local_output1 = torch.empty_like(input_tensor1)
+        scales1 = torch.rand(tensor.shape[0]).cuda()
+        scale_output1 = torch.empty_like(scales1)
+        all_to_all_single(local_output1, input_tensor1, group=groups[f'local_{intra_idx}'])
+        all_to_all_single(scale_output1, scales1, group=groups[f'local_{intra_idx}'])
+
+        input_tensor2 = tensor.chunk(16)[1]
+        local_output2 = torch.empty_like(input_tensor2)
+        scales2 = torch.rand(tensor.shape[0]).cuda()
+        scale_output2 = torch.empty_like(scales2)
+        all_to_all_single(local_output2, input_tensor2, group=groups[f'local_{intra_idx}'])
+        all_to_all_single(scale_output2, scales2, group=groups[f'local_{intra_idx}'])
+
+        
+        input_tensor3 = tensor.chunk(16)[2]
+        local_output3 = torch.empty_like(input_tensor3)
+        scales3 = torch.rand(tensor.shape[0]).cuda()
+        scale_output3 = torch.empty_like(scales3)
+        all_to_all_single(local_output3, input_tensor3, group=groups[f'local_{intra_idx}'])
+        all_to_all_single(scale_output3, scales3, group=groups[f'local_{intra_idx}'])
+
+        input_tensor4 = tensor.chunk(16)[3]
+        local_output4 = torch.empty_like(input_tensor4)
+        scales4 = torch.rand(tensor.shape[0]).cuda()
+        scale_output4 = torch.empty_like(scales4)
+        all_to_all_single(local_output4, input_tensor4, group=groups[f'local_{intra_idx}'])
+        all_to_all_single(scale_output4, scales4, group=groups[f'local_{intra_idx}'])
+        '''                  
 
         # E7: 2x E4(M/16)
         '''
@@ -176,9 +207,39 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         all_to_all_single(local_output2, input_tensor2, group=groups[f'global_{inter_idx}'])
         all_to_all_single(scale_output2, scales2, group=groups[f'global_{inter_idx}'])
         '''
+        # E7: 4x E4(M/32)
+        
+        input_tensor1 = tensor.chunk(128)[0]
+        local_output1 = torch.empty_like(input_tensor1)
+        scales1 = torch.rand(tensor.shape[0]).chunk(16)[0].cuda()
+        scale_output1 = torch.empty_like(scales1)
+        all_to_all_single(local_output1, input_tensor1, group=groups[f'global_{inter_idx}'])
+        all_to_all_single(scale_output1, scales1, group=groups[f'global_{inter_idx}'])
+
+        input_tensor2 = tensor.chunk(128)[1]
+        local_output2 = torch.empty_like(input_tensor2)
+        scales2 = torch.rand(tensor.shape[0]).chunk(16)[1].cuda()
+        scale_output2 = torch.empty_like(scales2)
+        all_to_all_single(local_output2, input_tensor2, group=groups[f'global_{inter_idx}'])
+        all_to_all_single(scale_output2, scales2, group=groups[f'global_{inter_idx}'])
+
+        input_tensor3 = tensor.chunk(128)[2]
+        local_output3 = torch.empty_like(input_tensor3)
+        scales3 = torch.rand(tensor.shape[0]).chunk(16)[0].cuda()
+        scale_output3 = torch.empty_like(scales3)
+        all_to_all_single(local_output3, input_tensor3, group=groups[f'global_{inter_idx}'])
+        all_to_all_single(scale_output3, scales3, group=groups[f'global_{inter_idx}'])
+
+        input_tensor4 = tensor.chunk(128)[3]
+        local_output4 = torch.empty_like(input_tensor4)
+        scales4 = torch.rand(tensor.shape[0]).chunk(16)[1].cuda()
+        scale_output4 = torch.empty_like(scales4)
+        all_to_all_single(local_output4, input_tensor4, group=groups[f'global_{inter_idx}'])
+        all_to_all_single(scale_output4, scales4, group=groups[f'global_{inter_idx}'])
+                
 
         # E8-0 (4-chunks): Pipeline intra, inter node comm with no kernels
-        
+        '''
         s1 = torch.cuda.Stream()
         s2 = torch.cuda.Stream()
         event_1 = torch.cuda.Event(False, False, False)
@@ -251,7 +312,7 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
             all_to_all_single(global_scale_output4, global_scale4, group=groups[f'global_{inter_idx}'], async_op=True) 
 
         s2.synchronize()
-        
+        '''
 
         # E8-0 (2-chunks): Pipeline intra, inter node comm with no kernels
         '''
