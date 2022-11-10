@@ -478,3 +478,14 @@ void launch_dequant_reduce(int8_t* reduced_data,
                            int groups_per_in_tensor,
                            int elems_per_in_group,
                            cudaStream_t stream);
+
+void launch_swizzled_quant(int8_t* q_data,
+                           float* q_scales,
+                           const __half* input_data,
+                           int num_bits,
+                           int groups,
+                           int elems_per_group,
+                           int pipelining,
+                           int nodes,
+                           int devices_per_node,
+                           cudaStream_t stream);

@@ -2291,6 +2291,47 @@ std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at:
     return {output, scales};
 }
 
+std::vector<at::Tensor> ds_swizzle_quant(at::Tensor& input_vals,
+                                         int num_bits,
+                                         int groups,
+                                         int pipeline_size,
+                                         int nodes,
+                                         int devices_per_node)
+{
+
+    auto scales_options = at::TensorOptions()
+                              .dtype(at::kFloat)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+    auto scales = torch::empty({groups}, scales_options);
+
+    auto output_options = at::TensorOptions()
+                              .dtype(at::kChar)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+
+    const int quantization_scalar = 8 / num_bits;
+    const int compressed_vals = at::numel(input_vals) / quantization_scalar;
+
+    auto output = torch::empty({compressed_vals}, output_options);
+    const int elems_per_group = at::numel(input_vals) / groups;
+
+    launch_swizzled_quant((int8_t*)output.data_ptr(),
+                          (float*)scales.data_ptr(),
+                          (__half*)input_vals.data_ptr(),
+                          num_bits,
+                          groups,
+                          elems_per_group,
+                          pipeline_size,
+                          nodes,
+                          devices_per_node,
+                          at::cuda::getCurrentCUDAStream());
+
+    return {output, scales};
+}
+
 template <typename T>
 std::vector<at::Tensor> Encoder_QKV(at::Tensor& input,
                                     std::vector<at::Tensor>& input_norm,
@@ -2683,4 +2724,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("ds_dequant", &ds_dequant);
     m.def("ds_dequant_int4", &ds_dequant_int4);
     m.def("ds_dequant_reduce_quant_int4", &ds_dequant_reduce_quant_int4);
+    m.def("ds_swizzle_quant", &ds_swizzle_quant);
 }
