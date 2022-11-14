@@ -147,12 +147,12 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes)))/num_nodes).view(-1)
         #temp = torch.randn_like(output_lst[idx])
         #for i in range(8):
-            #if this_rank == i:
-                #print(f"output tensor is {output_lst[idx]}, shape is {output_lst[idx].shape}\n")
+        if this_rank == 0:
+            print(f"output tensor is {output_lst[idx]}, shape is {output_lst[idx].shape}\n")
         #torch.cuda.synchronize()
     return output_lst[idx]
-
 '''
+
 
 @instrument_w_nvtx
 @torch.no_grad()
@@ -160,34 +160,85 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
     local_world_size = torch.cuda.device_count()
     global_world_size = dist.get_world_size()
     num_nodes = global_world_size // local_world_size
-    #inter_quant_group = 256
     this_rank = dist.get_rank()
-    #print(f"num_nodes is {num_nodes}, local_world_size is {local_world_size}, global_world_size is {global_world_size}, this_rank is {this_rank}\n")
     intra_idx = int(this_rank/local_world_size)
-    #print(f"all-to-all intra node on local group index {intra_idx}\n")
     inter_idx = this_rank%local_world_size
-    #print(f"this_rank is {this_rank}, global group index {inter_idx}\n")
     output_lst: List[Tensor] = [None] * len(tensors)
     for idx, tensor in enumerate(tensors):
-
-        local_output = torch.empty_like(tensor.chunk(local_world_size)[0])
-        #reduce_scatter(local_output, input_tensor, group=groups[f'local_{intra_idx}'])
-        _torch_reduce_scatter_fn(tensor, local_output, group=groups[f'local_{intra_idx}'])
-
-        if local_output.dim() == 1:
-            inter_quant_group = local_output.shape[0] // 32
+        event_1 = torch.cuda.Event(False, False, False)
+        event_2 = torch.cuda.Event(False, False, False)
+        event_3 = torch.cuda.Event(False, False, False)
+        event_4 = torch.cuda.Event(False, False, False)
+        assert tensor.numel()>=256, 'Tensor too small, must be bigger than 256'
+        if tensor.dim()==1:
+            intra_quant_group = 256
         else:
-            inter_quant_group = max(local_output.shape[0], local_output.shape[1],256)
-        inter_quant_int8, inter_q_scales = quantizer_cuda_module.ds_act_quant_int4(local_output, inter_quant_group)
-        inter_output_single = torch.empty_like(inter_quant_int8)
-        inter_q_scale_out = torch.empty_like(inter_q_scales)
+            intra_quant_group = max(tensor.shape[0], tensor.shape[1], 256)
+        inter_quant_group = intra_quant_group // 8
 
-        all_to_all_single(inter_output_single, inter_quant_int8, group=groups[f'global_{inter_idx}'])
-        all_to_all_single(inter_q_scale_out, inter_q_scales, group = groups[f'global_{inter_idx}'])
-        #torch.cuda.synchronize()
-        inter_dequant_fp16 = quantizer_cuda_module.ds_dequant_int4(inter_output_single, inter_q_scale_out, inter_quant_group)
+        input_tensor1, input_tensor2 = tensor.chunk(2)[0], tensor.chunk(2)[1] 
+        #intra_quant_int4, intra_q_scales = quantizer_cuda_module.ds_act_quant_int4(tensor, intra_quant_group)
+        #input_tensor1, input_tensor2 = intra_quant_int4.chunk(2)
+        #if this_rank == 0:
+            #print(f"input tensor1 is {input_tensor1}\n")
+            #print(f"input tensor2 is {input_tensor2}\n")
+        scales1, scales2= tensor.chunk(64)[0], tensor.chunk(64)[1] #intra_q_scales.chunk(2)
+        local_output1 = torch.empty_like(input_tensor1)
+        scale_output1 = torch.empty_like(scales1)
+        local_output2 = torch.empty_like(input_tensor2)
+        scale_output2 = torch.empty_like(scales2)
 
-        output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes)))/global_world_size).view(-1)
+        s1 = torch.cuda.current_stream()
+        with torch.cuda.stream(s1):
+            all_to_all_single(local_output1, input_tensor1, group=groups[f'local_{intra_idx}'])
+            all_to_all_single(scale_output1, scales1, group=groups[f'local_{intra_idx}'])
+            s1.record_event(event_1)
+            all_to_all_single(local_output2, input_tensor2, group=groups[f'local_{intra_idx}'])
+            all_to_all_single(scale_output2, scales2, group=groups[f'local_{intra_idx}'])
+            s1.record_event(event_2)
+
+        s2 = torch.cuda.Stream()
+        s2.wait_event(event_1)
+        #global_input_tensor1, global_scales1 = quantizer_cuda_module.ds_dequant_reduce_quant_int4(local_output1, scale_output1, intra_quant_group//2, inter_quant_group//2)
+        global_input_tensor1 = local_output1.chunk(8)[0]
+        global_scales1 = scale_output1.chunk(8)[0]
+        global_output1 = torch.empty_like(global_input_tensor1)
+        global_scale_output1 = torch.empty_like(global_scales1)
+        with torch.cuda.stream(s2):
+            all_to_all_single(global_output1, global_input_tensor1, group=groups[f'global_{inter_idx}'])
+            all_to_all_single(global_scale_output1, global_scales1, group=groups[f'global_{inter_idx}'])
+            s2.record_event(event_3)
+
+        s2.wait_event(event_2)
+        s2.synchronize()
+        #global_input_tensor2, global_scales2 = quantizer_cuda_module.ds_dequant_reduce_quant_int4(local_output2, scale_output2, intra_quant_group//2, inter_quant_group//2)
+        global_input_tensor2 = local_output2.chunk(8)[0]
+        global_scales2 = scale_output2.chunk(8)[0]
+        global_output2 = torch.empty_like(global_input_tensor2)
+        global_scale_output2 = torch.empty_like(global_scales2)
+
+        with torch.cuda.stream(s2):
+            all_to_all_single(global_output2, global_input_tensor2, group=groups[f'global_{inter_idx}'])
+            all_to_all_single(global_scale_output2, global_scales2, group=groups[f'global_{inter_idx}'])
+            s2.record_event(event_4)
+
+        s1 = torch.cuda.current_stream()
+        s1.wait_event(event_3)
+        #final_output1 = quantizer_cuda_module.ds_dequant_int4(global_output1, global_scale_output1, inter_quant_group//2)
+        final_output1 = global_output1
+        #final_scale1 = global_scale_output1
+        s1.wait_event(event_4)
+        s1.synchronize()
+        final_output2 = global_output1
+        #final_scale2 = global_scale_output1
+        #final_output2 = quantizer_cuda_module.ds_dequant_int4(global_output2, global_scale_output2, inter_quant_group//2)
+        inter_dequant_fp16 = torch.concat((final_output1, final_output2))
+        output_lst[idx] = (sum(list(inter_dequant_fp16.chunk(num_nodes)))/num_nodes).view(-1)
+        #tmp = torch.rand_like(output_lst[idx])
+        #output_lst[idx] = tmp
+        #if this_rank == 0:
+            #print(f"output is {output_lst[idx]}, vals is {output_lst[idx].shape}\n")
+
     return output_lst
 
 
