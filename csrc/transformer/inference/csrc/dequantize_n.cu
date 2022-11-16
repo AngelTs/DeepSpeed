@@ -51,7 +51,7 @@ DS_D_INLINE void quantize_chunk(int8_t* local_output, const __half2* data, float
 }
 
 template <int numBits, int numTensors, int totalChunks>
-__global__ void dequant_reduce(int8_t* reduced_data,
+__global__ void __launch_bounds__(1024) dequant_reduce(int8_t* reduced_data,
                                float* reduced_scales,
                                const int8_t* input_data,
                                const float* input_scales,
@@ -250,6 +250,8 @@ void launch_dequant_reduce(int8_t* reduced_data,
         //LAUNCH_DEQUANT_REDUCE_IMPL(4, 4);
     } else if (num_bits == 4 && num_gpus == 8) {
         LAUNCH_DEQUANT_REDUCE_IMPL(4, 8);
+    } else if (num_bits == 4 && num_gpus == 16) {
+        LAUNCH_DEQUANT_REDUCE_IMPL(4, 16);
     } else if (num_bits == 8 && num_gpus == 4) {
        // LAUNCH_DEQUANT_REDUCE_IMPL(8, 4);
     } else if (num_bits == 8 && num_gpus == 8) {
