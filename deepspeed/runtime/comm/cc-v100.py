@@ -43,6 +43,7 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
     #print(f"this_rank is {this_rank}, global group index {inter_idx}\n")
     output_lst: List[Tensor] = [None] * len(tensors)
     for idx, tensor in enumerate(tensors):
+        assert tensor.numel()>=256, 'Tensor too small, must be bigger than 256'
         if tensor.dim()==1:
             intra_quant_group = 256
         else:
@@ -65,7 +66,6 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
         #if this_rank == 0:
             #print(f"size of outout tensor is {output_lst[idx].shape}, element size is {output_lst[idx].element_size()}\n")
     return output_lst
-
 
 
 
