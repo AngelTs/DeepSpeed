@@ -469,15 +469,19 @@ def shutdown_init_context():
 
 
 class AllGatherHandle:
-    def __init__(self, handle, param: Parameter) -> None:
+    def __init__(self, handle, param: Parameter, quantization=None) -> None:
         if param.ds_status != ZeroParamStatus.INFLIGHT:
             raise RuntimeError(f"expected param {param.ds_summary()} to be available")
 
         self.__handle = handle
         self.__param = param
+        self.__quantization = quantization
 
     def wait(self) -> None:
         instrument_w_nvtx(self.__handle.wait)()
+        if self.__quantization:
+            instrument_w_nvtx(self.__quantization.quant_handle.wait)()
+            self.__param.data=self.__quantization.backend.dequantize(self.__quantization.quantized_param,self.__quantization.scale_buffer)
         self.__param.ds_status = ZeroParamStatus.AVAILABLE
 
 
@@ -488,12 +492,14 @@ class AllGatherCoalescedHandle:
         params: List[Parameter],
         partitions: List[Tensor],
         world_size: int,
+        quantization = None,
     ) -> None:
         self.__allgather_handle = allgather_handle
         self.__params = params
         self.__partitions = partitions
         self.__world_size = world_size
         self.__complete = False
+        self.__quantization = quantization
 
         for param in self.__params:
             if param.ds_status != ZeroParamStatus.INFLIGHT:
@@ -506,6 +512,17 @@ class AllGatherCoalescedHandle:
             return
 
         instrument_w_nvtx(self.__allgather_handle.wait)()
+
+        if self.__quantization:
+            instrument_w_nvtx(self.__quantization.quant_handle.wait)()
+            flat_tensor=self.__quantization.backend.dequantize(self.__quantization.quantized_param,self.__quantization.scale_buffer)
+
+            self.__partitions: List[Parameter] = []
+            for i in range(self.__quantization.world_size):
+                self.__partitions.append(
+                    flat_tensor.narrow(0,
+                                    self.__quantization.partition_sz * i,
+                                    self.__quantization.partition_sz))
 
         # split the single tensor out into individual tensors
         param_offset = 0
@@ -531,6 +548,50 @@ class AllGatherCoalescedHandle:
             param_offset += param.ds_tensor.ds_numel
 
         self.__complete = True
+
+class QuantizationInfo:
+    # a placeholder object to store all quant related vars used in handles
+    def __init__(self) -> None:
+        self.quantized_param = None
+        self.backend=None
+        self.quant_handle=None
+        self.scale_buffer=None
+
+class CUDAQuantizer:
+    async_flag=True
+    target_group_size=8000 # the optimal size is 4k, so we set the target to be below 8k
+    group_size_cache=dict()
+
+    def __init__(self):
+        self.quantizer_cuda_module = deepspeed.ops.op_builder.QuantizerBuilder().load()
+        # print(dir(self.quantizer_cuda_module))
+        # self.quant_timer=collections.defaultdict(lambda: np.array([0, 0],dtype=np.float32))
+
+    def quantize(self, param, groups=None):
+        if groups is None:
+            try:
+                groups=self.group_size_cache[param.numel()]
+            except KeyError:
+                groups=1
+                while True:
+                    if param.numel() % (8*groups*2)==0 and param.numel() / (8*groups)>self.target_group_size: #hard limit of 16k group_size
+                        groups*=2
+                    else:
+                        break
+                assert (param.numel() % (8*groups)==0),f"{param.numel()} cannot be divided by 8*{groups}"
+                assert (param.numel() % (8*groups)<16000),f"{param.numel()} / {groups} is larger than 16k"
+                self.group_size_cache[param.numel()]=groups
+        # print(f"quantize a param of shape {param.shape} with group number {groups}")
+        return self.quantizer_cuda_module.quantize(param, groups,8,self.quantizer_cuda_module.Symmetric)
+        # quantized_tensor,quantized_meta=self.quantizer_cuda_module.quantize(param, groups,8,self.quantizer_cuda_module.Symmetric)
+        # assert quantized_tensor.shape==param.shape
+        # return (quantized_tensor,quantized_meta)
+
+    def dequantize(self, quantized_param, scale):
+        return self.quantizer_cuda_module.dequantize(quantized_param, scale, scale.numel(),8,self.quantizer_cuda_module.Symmetric)
+        # dequantized_tensor=self.quantizer_cuda_module.dequantize(quantized_param, scale, scale.numel(),8,self.quantizer_cuda_module.Symmetric)
+        # assert dequantized_tensor.shape==quantized_param.shape,f"{dequantized_tensor.shape}!={quantized_param.shape}"
+        # return dequantized_tensor
 
 
 # Replaces all parameters in module with Scattered Parameters
@@ -675,6 +736,10 @@ class Init(InsertPostInitMethodToModuleSubClasses):
         self.local_device = torch.device('cuda:{}'.format(os.environ["LOCAL_RANK"]))
         torch.cuda.set_device(self.local_device)
 
+        #quant
+        self.quantizer_module = CUDAQuantizer()
+        print_rank_0(f'Using quantizer: {self.quantizer_module.__class__.__name__}',force=True)
+
         if _ds_config is not None and _ds_config.zero_config.offload_param is not None:
             remote_device = _ds_config.zero_config.offload_param.device
             pin_memory = _ds_config.zero_config.offload_param.pin_memory
@@ -804,7 +869,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
 
         @instrument_w_nvtx
         def all_gather_coalesced(params: Iterable[Parameter],
-                                 safe_mode: bool = False) -> AllGatherCoalescedHandle:
+                                 safe_mode: bool = False, quant=True) -> AllGatherCoalescedHandle:
 
             # fetches from nvme if the partition is not available and in nvme
             self._ensure_availability_of_partitioned_params(params)
@@ -836,48 +901,131 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             if len(params) == 1:
                 # have an opportunity to avoid some intermediate memory allocations
                 param, = params
-                param_buffer = torch.empty(
-                    math.ceil(param.ds_numel / self.world_size) * self.world_size,
-                    dtype=param.dtype,
-                    device=torch.cuda.current_device(),
-                    requires_grad=False,
-                )
-                handle = _dist_allgather_fn(
-                    param.ds_tensor.to(torch.cuda.current_device()),
-                    param_buffer,
-                    self.ds_process_group)
-                param.data = param_buffer.narrow(0,
-                                                 0,
-                                                 param.ds_numel).view(param.ds_shape).to(
-                                                     param.device)
-                return AllGatherHandle(handle, param)
+                if not quant:
+                    param_buffer = torch.empty(
+                        math.ceil(param.ds_numel / self.world_size) * self.world_size,
+                        dtype=param.dtype,
+                        device=torch.cuda.current_device(),
+                        requires_grad=False,
+                    )
+                    handle = _dist_allgather_fn(
+                        param.ds_tensor.to(torch.cuda.current_device()),
+                        param_buffer,
+                        self.ds_process_group)
+                    param.data = param_buffer.narrow(0,
+                                                    0,
+                                                    param.ds_numel).view(param.ds_shape).to(
+                                                        param.device)
+                    return AllGatherHandle(handle, param)
+                else:
+                    param_buffer = torch.empty(
+                        math.ceil(param.ds_numel / self.world_size) * self.world_size,
+                        dtype=torch.int8,
+                        device=torch.cuda.current_device(),
+                        requires_grad=False,
+                    )
+                    # print(f"Quantize a tensor of shape {param.ds_tensor.shape}")
+                    quantized_param,scales=self.quantizer_module.quantize(param.ds_tensor)
+                    handle = _dist_allgather_fn(
+                        quantized_param,
+                        param_buffer,
+                        self.ds_process_group)
+
+                    quant_scale_buffer = torch.empty(
+                        scales.numel()*self.world_size,
+                        dtype=torch.float32,
+                        device=torch.cuda.current_device(),
+                        requires_grad=False,
+                    )
+                    quant_handle = _dist_allgather_fn(
+                        scales,
+                        quant_scale_buffer,
+                        self.ds_process_group)
+                    quant_info=QuantizationInfo()
+                    # param.data = param_buffer.narrow(0,
+                    #                                 0,
+                    #                                 param.ds_numel).view(param.ds_shape).to(
+                    #                                     param.device)
+                    quant_info.quantized_param = param_buffer.narrow(0,
+                                                    0,
+                                                    param.ds_numel).view(param.ds_shape).to(
+                                                        param.device)
+                    quant_info.backend=self.quantizer_module
+                    quant_info.quant_handle=quant_handle
+                    quant_info.scale_buffer=quant_scale_buffer
+                    return AllGatherHandle(handle, param,quantization=quant_info)
+
             else:
                 partition_sz = sum(p.ds_tensor.ds_numel for p in params)
-                flat_tensor = torch.empty(partition_sz * self.world_size,
-                                          dtype=get_only_unique_item(p.dtype
-                                                                     for p in params),
-                                          device=torch.cuda.current_device(),
-                                          requires_grad=False)
-                partitions: List[Parameter] = []
-                for i in range(self.world_size):
-                    partitions.append(
-                        flat_tensor.narrow(0,
-                                           partition_sz * i,
-                                           partition_sz))
+                if not quant:
+                    flat_tensor = torch.empty(partition_sz * self.world_size,
+                                            dtype=get_only_unique_item(p.dtype
+                                                                        for p in params),
+                                            device=torch.cuda.current_device(),
+                                            requires_grad=False)
+                    partitions: List[Parameter] = []
+                    for i in range(self.world_size):
+                        partitions.append(
+                            flat_tensor.narrow(0,
+                                            partition_sz * i,
+                                            partition_sz))
 
-                instrument_w_nvtx(torch.cat)(
-                    [p.ds_tensor.to(torch.cuda.current_device()) for p in params],
-                    out=partitions[self.rank])
-                handle = _dist_allgather_fn(partitions[self.rank],
-                                            flat_tensor,
-                                            self.ds_process_group)
+                    instrument_w_nvtx(torch.cat)(
+                        [p.ds_tensor.to(torch.cuda.current_device()) for p in params],
+                        out=partitions[self.rank])
+                    handle = _dist_allgather_fn(partitions[self.rank],
+                                                flat_tensor,
+                                                self.ds_process_group)
 
-                return AllGatherCoalescedHandle(
-                    allgather_handle=handle,
-                    params=params,
-                    partitions=partitions,
-                    world_size=self.world_size,
-                )
+                    return AllGatherCoalescedHandle(
+                        allgather_handle=handle,
+                        params=params,
+                        partitions=partitions,
+                        world_size=self.world_size,
+                    )
+                else:
+                    flat_tensor = torch.empty(partition_sz * self.world_size,
+                                            dtype=torch.int8,
+                                            device=torch.cuda.current_device(),
+                                            requires_grad=False)
+                    # partitions: List[Parameter] = []
+                    # for i in range(self.world_size):
+                    #     partitions.append(
+                    #         flat_tensor.narrow(0,
+                    #                         partition_sz * i,
+                    #                         partition_sz))
+
+                    quantized_param, scales=self.quantizer_module.quantize(instrument_w_nvtx(torch.cat)(
+                        [p.ds_tensor.to(torch.cuda.current_device()) for p in params]))
+                    # print(f"Quantized a tensor of shape {quantized_param.shape}")
+                    handle = _dist_allgather_fn(quantized_param,
+                                                flat_tensor,
+                                                self.ds_process_group)
+                    quant_info=QuantizationInfo()
+                    quant_scale_buffer = torch.empty(
+                        scales.numel()*self.world_size,
+                        dtype=torch.float32,
+                        device=torch.cuda.current_device(),
+                        requires_grad=False,
+                    )
+                    quant_handle = _dist_allgather_fn(
+                        scales,
+                        quant_scale_buffer,
+                        self.ds_process_group)
+                    quant_info.quantized_param = flat_tensor
+                    quant_info.backend=self.quantizer_module
+                    quant_info.quant_handle=quant_handle
+                    quant_info.scale_buffer=quant_scale_buffer
+                    quant_info.partition_sz=partition_sz
+                    quant_info.world_size=self.world_size
+                    return AllGatherCoalescedHandle(
+                        allgather_handle=handle,
+                        params=params,
+                        partitions=None,
+                        world_size=self.world_size,
+                        quantization=quant_info,
+                    )
+
 
         def partition(param_list=None, hierarchy=0, has_been_updated=False):
             cls = param
