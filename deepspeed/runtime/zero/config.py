@@ -259,12 +259,15 @@ class DeepSpeedZeroConfig(DeepSpeedConfigModel):
     """
 
     round_robin_gradients: bool = False
-    zero_param_group_size: int = Field(1e6, ge=1)
     """
     Stage 1 and 2 optimization for CPU offloading that parallelizes gradient
     copying to CPU memory among ranks by fine-grained gradient partitioning.
     Performance benefit grows with gradient accumulation steps (more copying
     between optimizer steps) or GPU count (increased parallelism).
+    """
+    zero_param_group_size: int = Field(1e6, ge=1)
+    """
+    Number of ranks in zero parameters partitioning secondary group
     """
 
     # Validators
