@@ -184,7 +184,8 @@ class DeepSpeedZeRoOffload(object):
                  param_persistence_threshold=100000,
                  model_persistence_threshold=sys.maxsize,
                  offload_param_config=None,
-                 mpu=None):
+                 mpu=None,
+                 zero_param_parallel_group=None):
 
         see_memory_usage("DeepSpeedZeRoOffload initialize [begin]", force=True)
 
@@ -192,9 +193,11 @@ class DeepSpeedZeRoOffload(object):
                      force=False)
 
         self.module = module
+        self.timers = timers
         self.dtype = list(module.parameters())[0].dtype
         self.offload_device = None
         self.offload_param_pin_memory = False
+        self.zero_param_parallel_group = zero_param_parallel_group
 
         if offload_param_config is not None and offload_param_config.device != OffloadDeviceEnum.none:
             self.offload_device = offload_param_config.device
@@ -249,6 +252,7 @@ class DeepSpeedZeRoOffload(object):
                 _max_available_parameters_in_numel,
                 allgather_stream=self.__allgather_stream,
                 prefetch_nvme=self.offload_device == OffloadDeviceEnum.nvme,
+                timers=self.timers,
             )
 
         return self.param_coordinators[training]
@@ -270,11 +274,22 @@ class DeepSpeedZeRoOffload(object):
                      config_dict_or_path=ds_config,
                      remote_device=self.offload_device,
                      pin_memory=self.offload_param_pin_memory,
-                     mpu=mpu)
+                     mpu=mpu,
+                     zero_param_parallel_group=self.zero_param_parallel_group)
 
     def destroy(self):
         self._remove_module_hooks()
-
+    '''
+    def invalidate_secondary_partition(self):
+        """Invalidate secondary partition in post step call of heirarchical 
+           partitioning ZeRO"""
+        ##TODO: add or replace with fw/bw fn
+        for param in iter_params(self.module, recurse=True):
+            print_rank_0(f"BEGIN use_sec {param.use_secondary_tensor}", force=True)
+            #param.ds_secondary_group_tensor=None
+            param.use_secondary_tensor = False
+            print_rank_0(f"END use_sec {param.use_secondary_tensor}", force=True)
+    '''
     def _remove_module_hooks(self):
         num_forward_hooks = len(self.forward_hooks)
         num_backward_hooks = len(self.backward_hooks)
@@ -311,7 +326,9 @@ class DeepSpeedZeRoOffload(object):
         persistent_params = []
         total_persistent_parameters = 0
         params_count = 0
-        for _, param in self.module.named_parameters(recurse=True):
+        for name, param in self.module.named_parameters(recurse=True):
+            print_rank_0(f'param {param.ds_id} - {name} numel = {param.ds_numel}', force=True)
+        #for _, param in self.module.named_parameters(recurse=True):
             if param.ds_numel + total_persistent_parameters > model_threshold:
                 continue
 
@@ -462,7 +479,7 @@ class DeepSpeedZeRoOffload(object):
         param_coordinator.trace_prologue(sub_module)
         if param_coordinator.is_record_trace():
             param_coordinator.record_module(sub_module)
-        param_coordinator.fetch_sub_module(sub_module)
+        param_coordinator.fetch_sub_module(sub_module, True)
 
         see_memory_usage(
             f"Before sub module function {sub_module.__class__.__name__} after fetch",
@@ -475,7 +492,7 @@ class DeepSpeedZeRoOffload(object):
             force=False)
 
         param_coordinator = self.get_param_coordinator(training=sub_module.training)
-        param_coordinator.release_sub_module(sub_module)
+        param_coordinator.release_sub_module(sub_module,backward=False)
 
         see_memory_usage(
             f"After sub module function {sub_module.__class__.__name__}  {sub_module.id} after release",
@@ -487,7 +504,7 @@ class DeepSpeedZeRoOffload(object):
         param_coordinator.trace_prologue(sub_module)
         if param_coordinator.is_record_trace():
             param_coordinator.record_module(sub_module)
-        param_coordinator.fetch_sub_module(sub_module)
+        param_coordinator.fetch_sub_module(sub_module, False)
 
     @torch.no_grad()
     def post_sub_module_backward_function(self, sub_module):
@@ -496,7 +513,7 @@ class DeepSpeedZeRoOffload(object):
             force=False)
 
         self.get_param_coordinator(
-            training=sub_module.training).release_sub_module(sub_module)
+            training=sub_module.training).release_sub_module(sub_module,backward=True)
 
         see_memory_usage(
             f"After sub module backward function {sub_module.__class__.__name__} {sub_module.id} after release",

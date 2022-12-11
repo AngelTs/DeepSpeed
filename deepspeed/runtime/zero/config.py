@@ -34,7 +34,8 @@ ZeRO optimization should be enabled as:
     "offload_param": {...},
     "offload_optimizer": {...},
     "ignore_unused_parameters": [true|false],
-    "round_robin_gradients": [true|false]
+    "round_robin_gradients": [true|false],
+    "zero_param_group_size": 1
     }
 }
 """
@@ -258,6 +259,7 @@ class DeepSpeedZeroConfig(DeepSpeedConfigModel):
     """
 
     round_robin_gradients: bool = False
+    zero_param_group_size: int = Field(1e6, ge=1)
     """
     Stage 1 and 2 optimization for CPU offloading that parallelizes gradient
     copying to CPU memory among ranks by fine-grained gradient partitioning.
