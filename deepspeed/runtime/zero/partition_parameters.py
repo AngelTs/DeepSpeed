@@ -979,18 +979,17 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     )
 
                     #All gather on secondary tensor (with intragroup comm) if available
-                #param_ds_tensor = param.ds_secondary_tensor if self.use_secondary_tensor and not forward else param.ds_tensor
-                #param_ds_tensor = param.ds_secondary_tensor if self.zero_param_process_group and not forward else param.ds_tensor
-                param_ds_tensor = param.ds_secondary_tensor if not forward and param.ds_secondary_tensor is not None else param.ds_tensor
-                #print_rank_0(f"SAGE ALLGCoal forward? {forward} secondary T {param.ds_secondary_tensor} param_ds_tensor {param_ds_tensor}", force=True)
-                #if self.rank > 375:
-                #   print("hpZeRO ALLGP1 Rank [", self.rank," ", rank_in_group, "]", param_ds_tensor.size(), param_buffer.size(), len(dist.get_all_ranks_from_group(ds_process_group)), "Forward? ", forward)
-                handles = _dist_allgather_fn(
+                    #param_ds_tensor = param.ds_secondary_tensor if self.use_secondary_tensor and not forward else param.ds_tensor
+                    #param_ds_tensor = param.ds_secondary_tensor if self.zero_param_process_group and not forward else param.ds_tensor
+                    param_ds_tensor = param.ds_secondary_tensor if not forward and param.ds_secondary_tensor is not None else param.ds_tensor
+                    #print_rank_0(f"SAGE ALLGCoal forward? {forward} secondary T {param.ds_secondary_tensor} param_ds_tensor {param_ds_tensor}", force=True)
+                
+                    handles = _dist_allgather_fn(
                         param_ds_tensor.to(torch.cuda.current_device()),
                         param_buffer,
                         ds_process_group,
-                )
-                     param.data = param_buffer.narrow(0,
+                    )
+                    param.data = param_buffer.narrow(0,
                                                     0,
                                                     param.ds_numel).view(param.ds_shape).to(
                                                         param.device)
@@ -1048,35 +1047,32 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                             device=torch.cuda.current_device(),
                                             requires_grad=False)
                     partitions: List[Parameter] = []
-                #print_rank_0(f"SAGE ALLGCoal forward? {forward} secondary T {param.ds_secondary_tensor}", force=True)
+                    #print_rank_0(f"SAGE ALLGCoal forward? {forward} secondary T {param.ds_secondary_tensor}", force=True)
                     for i in range(world_size):
                         partitions.append(
                             flat_tensor.narrow(0,
                                             partition_sz * i,
                                             partition_sz))
 
-                if self.zero_param_process_group and not forward:
-                    instrument_w_nvtx(torch.cat)([
-                        p.ds_secondary_tensor.to(torch.cuda.current_device())
-                        for p in params
-                    ],
-                                                 out=partitions[rank_in_group])
-                else:
+                    if self.zero_param_process_group and not forward:
+                        instrument_w_nvtx(torch.cat)([
+                            p.ds_secondary_tensor.to(torch.cuda.current_device())
+                           for p in params
+                        ],
+                        out=partitions[rank_in_group])
+                    else:
                         instrument_w_nvtx(torch.cat)(
                             [p.ds_tensor.to(torch.cuda.current_device()) for p in params],
                             out=partitions[rank_in_group])
-                '''
-                partition_list = []
-                for p in params:
-                    pds_tensor = p.ds_secondary_tensor if not forward and p.ds_secondary_tensor is not None else p.ds_tensor
-                    partition_list.append(pds_tensor.to(torch.cuda.current_device()))
+                    '''
+                    partition_list = []
+                    for p in params:
+                        pds_tensor = p.ds_secondary_tensor if not forward and p.ds_secondary_tensor is not None else p.ds_tensor
+                        partition_list.append(pds_tensor.to(torch.cuda.current_device()))
 
-                instrument_w_nvtx(torch.cat)(partition_list,
+                    instrument_w_nvtx(torch.cat)(partition_list,
                                              out=partitions[rank_in_group])
-                '''
-                #if self.rank > 375:
-                #   print("Rank [", self.rank," ", rank_in_group, "]", partitions[rank_in_group].size(), flat_tensor.size(), world_size, "Forward? ", forward)
-
+                    '''
                     handle = _dist_allgather_fn(partitions[rank_in_group],
                                                 flat_tensor,
                                                 ds_process_group)
