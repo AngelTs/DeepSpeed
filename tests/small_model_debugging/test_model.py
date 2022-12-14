@@ -46,9 +46,12 @@ def get_args(tmpdir, config_dict):
     parser = argparse.ArgumentParser()
     parser.add_argument("--local_rank", type=int, default=0)
     parser.add_argument('--zero', type=int, default=0)
+    parser.add_argument('--zero_param_group_size', type=int, default=1)
     args = parser.parse_args()  #args=''
 
     config_dict["zero_optimization"]["stage"] = args.zero
+    config_dict["zero_optimization"][
+        "zero_param_group_size"] = args.zero_param_group_size
     print('config_dict["zero_optimization"]', config_dict["zero_optimization"])
     config_path = create_config_from_dict(tmpdir, config_dict)
 
@@ -66,7 +69,7 @@ print('seed:', 2222 + rank)
 torch.random.manual_seed(2222 + rank)
 
 config_dict = {
-    "train_batch_size": 8,
+    "train_batch_size": 64,
     "steps_per_print": 1,
     "optimizer": {
         "type": "Adam",
@@ -80,12 +83,13 @@ config_dict = {
     },
     "zero_optimization": {
         "stage": 0,
-        "reduce_bucket_size": 20
+        "reduce_bucket_size": 20,
+        "zero_param_group_size": 1
     }
 }
 #        "initial_scale_power": 15
 args = get_args('/tmp/', config_dict)
-hidden_dim = 4
+hidden_dim = 4 * 1024
 
 model = SimpleModel(hidden_dim, empty_grad=False)
 
