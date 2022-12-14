@@ -1143,6 +1143,8 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                         params=params,
                         partitions=None,
                         world_size=self.world_size,
+                        use_secondary_tensor=use_secondary_tensor,
+                        forward=forward,
                         quantization=quant_info,
                     )
 
