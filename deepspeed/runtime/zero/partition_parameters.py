@@ -1011,7 +1011,8 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     return AllGatherHandle(handles, param)
                 else:
                     param_buffer = torch.empty(
-                        math.ceil(param.ds_numel / self.world_size) * self.world_size,
+                        #math.ceil(param.ds_numel / self.world_size) * self.world_size,
+                        buffer_size,
                         dtype=torch.int8,
                         device=torch.cuda.current_device(),
                         requires_grad=False,
@@ -1021,10 +1022,10 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     quantized_param,scales=self.quantizer_module.quantize(param_ds_tensor)
                     handle = _dist_allgather_fn(quantized_param,
                                                 param_buffer,
-                                                self.ds_process_group)
+                                                ds_process_group)
                     ###TODO: fix buffer size
                     quant_scale_buffer = torch.empty(
-                        scales.numel() * self.world_size,
+                        scales.numel() * world_size,
                         dtype=torch.float32,
                         device=torch.cuda.current_device(),
                         requires_grad=False,
@@ -1038,6 +1039,8 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     #                                 param.ds_numel).view(param.ds_shape).to(
                     #                                     param.device)
                     ##FIX
+                    ##change ds_num
+                    #secondary_tensor.shape[0]*world_size??
                     quant_info.quantized_param = param_buffer.narrow(
                         0,
                         0,
@@ -1124,25 +1127,25 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                                 ds_process_group)
                     quant_info = QuantizationInfo()
                     quant_scale_buffer = torch.empty(
-                        scales.numel() * self.world_size,
+                        scales.numel() * world_size,
                         dtype=torch.float32,
                         device=torch.cuda.current_device(),
                         requires_grad=False,
                     )
                     quant_handle = _dist_allgather_fn(scales,
                                                       quant_scale_buffer,
-                                                      self.ds_process_group)
+                                                      ds_process_group)
                     quant_info.quantized_param = flat_tensor
                     quant_info.backend = self.quantizer_module
                     quant_info.quant_handle = quant_handle
                     quant_info.scale_buffer = quant_scale_buffer
                     quant_info.partition_sz = partition_sz
-                    quant_info.world_size = self.world_size
+                    quant_info.world_size = world_size
                     return AllGatherCoalescedHandle(
                         allgather_handle=handle,
                         params=params,
                         partitions=None,
-                        world_size=self.world_size,
+                        world_size=world_size,
                         use_secondary_tensor=use_secondary_tensor,
                         forward=forward,
                         quantization=quant_info,
