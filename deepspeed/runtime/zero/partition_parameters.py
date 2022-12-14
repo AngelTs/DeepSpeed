@@ -919,9 +919,6 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 if param.ds_status != ZeroParamStatus.NOT_AVAILABLE:
                     raise RuntimeError(param.ds_summary())
                 param.ds_status = ZeroParamStatus.INFLIGHT
-                #reset secondary_tensor
-                #if forward:
-                #    param.ds_secondary_tensor=None
 
             #use appropriate all gather process group
             ds_process_group = self.ds_process_group
@@ -1002,12 +999,13 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                         requires_grad=False,
                     )
                     # print(f"Quantize a tensor of shape {param.ds_tensor.shape}")
-                    quantized_param,scales=self.quantizer_module.quantize(param.ds_tensor)
+                    param_ds_tensor = param.ds_secondary_tensor if not forward and param.ds_secondary_tensor is not None else param.ds_tensor
+                    quantized_param,scales=self.quantizer_module.quantize(param_ds_tensor)
                     handle = _dist_allgather_fn(
                         quantized_param,
                         param_buffer,
                         self.ds_process_group)
-
+                    ###TODO: fix buffer size
                     quant_scale_buffer = torch.empty(
                         scales.numel()*self.world_size,
                         dtype=torch.float32,
@@ -1017,12 +1015,13 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     quant_handle = _dist_allgather_fn(
                         scales,
                         quant_scale_buffer,
-                        self.ds_process_group)
+                        ds_process_group)
                     quant_info=QuantizationInfo()
                     # param.data = param_buffer.narrow(0,
                     #                                 0,
                     #                                 param.ds_numel).view(param.ds_shape).to(
                     #                                     param.device)
+                    ##FIX
                     quant_info.quantized_param = param_buffer.narrow(0,
                                                     0,
                                                     param.ds_numel).view(param.ds_shape).to(
@@ -1082,8 +1081,8 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                         params=params,
                         partitions=partitions,
                         world_size=world_size,
-                    use_secondary_tensor=use_secondary_tensor,
-                    forward=forward,
+                        use_secondary_tensor=use_secondary_tensor,
+                        forward=forward,
                     )
                 else:
                     flat_tensor = torch.empty(partition_sz * self.world_size,
