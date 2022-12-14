@@ -171,8 +171,8 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
             param_persistence_threshold=param_persistence_threshold,
             model_persistence_threshold=model_persistence_threshold,
             offload_param_config=offload_optimizer_config,
-            mpu=mpu)
-            zero_param_parallel_group=zpg):
+            mpu=mpu,
+            zero_param_parallel_group=zpg)
 
         self.persistent_parameters = self.parameter_offload.persistent_parameters
         self._configure_offloading(offload_optimizer_config, offload_param_config)
