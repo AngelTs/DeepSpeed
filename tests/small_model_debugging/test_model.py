@@ -69,7 +69,7 @@ print('seed:', 2222 + rank)
 torch.random.manual_seed(2222 + rank)
 
 config_dict = {
-    "train_batch_size": 64,
+    "train_batch_size": 256,
     "steps_per_print": 1,
     "optimizer": {
         "type": "Adam",

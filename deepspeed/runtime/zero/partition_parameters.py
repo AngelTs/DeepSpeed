@@ -773,7 +773,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             )  #use rank in groups
             ##TODO: check that MPU is not set
             logger.info(
-                "Partition parameter my rank in world {} my rank in group {} ranks in my param partition group: {} "
+                "hpZeRO partition parameter my rank in world {} my rank in group {} ranks in my param partition group: {} "
                 .format(self.rank,
                         self.rank_in_group,
                         groups._get_zero_param_intra_parallel_group_ranks()))
@@ -949,7 +949,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 rank_in_group = self.rank_in_group
                 world_size = self.num_ranks_in_param_group
                 use_secondary_tensor = True
-                print_rank_0("ALLGCoal Using hpZeRO", force=True)
+                #print_rank_0("ALLGCoal Using hpZeRO", force=True)
             #pprint(dir(ds_process_group))
             #logger.info(
             #         "AllGCoalsc my rank in world {} sec tensor {} fwd {} group_rank {} group: {}"
