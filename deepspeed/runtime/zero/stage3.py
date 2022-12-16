@@ -106,7 +106,8 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                  gradient_accumulation_steps=1,
                  elastic_checkpoint=False,
                  aio_config=None,
-                 zero_param_group_size=1):
+                 zero_param_group_size=1,
+                 zero_quantized_weights=False):
 
         see_memory_usage("Stage 3 initialize beginning", force=True)
 
@@ -172,7 +173,8 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
             model_persistence_threshold=model_persistence_threshold,
             offload_param_config=offload_optimizer_config,
             mpu=mpu,
-            zero_param_parallel_group=zpg)
+            zero_param_parallel_group=zpg,
+            zero_quantized_weights=zero_quantized_weights)
 
         self.persistent_parameters = self.parameter_offload.persistent_parameters
         self._configure_offloading(offload_optimizer_config, offload_param_config)

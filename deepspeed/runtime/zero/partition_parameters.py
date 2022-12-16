@@ -632,7 +632,8 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                  enabled=True,
                  dtype=None,
                  mpu=None,
-                 zero_param_parallel_group=None):
+                 zero_param_parallel_group=None,
+                 zero_quantized_weights=False):
         """A context to enable massive model construction for training with
         ZeRO-3. Models are automatically partitioned (or, sharded) across the
         system and converted to half precision.
@@ -662,6 +663,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 Supported options are ``torch.half`` and ``torch.float``. Defaults to ``None``
             mpu (``object``, optional): A model parallelism unit object that implements get_{model,data}_parallel_{rank,group,world_size}.
             zero_param_parallel_group(``object``, optional): Parallel (comm) group for dual partitioning of ZeRO params.
+            zero_quantized_weights (bool, optional): If ``True``, turn on quantized weights in all gather weights. Default is ``False``
 
         This context accelerates model initialization and enables models that
         are too large to allocate in their entirety in CPU memory. It has the
@@ -783,10 +785,12 @@ class Init(InsertPostInitMethodToModuleSubClasses):
         self.local_device = torch.device('cuda:{}'.format(os.environ["LOCAL_RANK"]))
         torch.cuda.set_device(self.local_device)
 
-        #quant
-        self.quantizer_module = CUDAQuantizer()
-        print_rank_0(f'Using quantizer: {self.quantizer_module.__class__.__name__}',
-                     force=True)
+        self.quantized_weights = zero_quantized_weights
+
+        if (self.quantized_weights):
+            self.quantizer_module = CUDAQuantizer()
+            print_rank_0(f'Using quantizer: {self.quantizer_module.__class__.__name__}',
+                         force=True)
 
         if _ds_config is not None and _ds_config.zero_config.offload_param is not None:
             remote_device = _ds_config.zero_config.offload_param.device
@@ -927,11 +931,12 @@ class Init(InsertPostInitMethodToModuleSubClasses):
         @instrument_w_nvtx
         def all_gather_coalesced(params: Iterable[Parameter],
                                  forward: bool,
-                                 safe_mode: bool = False,
-                                 quant=True) -> AllGatherCoalescedHandle:
+                                 safe_mode: bool = False) -> AllGatherCoalescedHandle:
 
             # fetches from nvme if the partition is not available and in nvme
             self._ensure_availability_of_partitioned_params(params)
+
+            quant = self.zero_quantized_weights
 
             for param in params:
                 if param.ds_status != ZeroParamStatus.NOT_AVAILABLE:

@@ -35,7 +35,8 @@ ZeRO optimization should be enabled as:
     "offload_optimizer": {...},
     "ignore_unused_parameters": [true|false],
     "round_robin_gradients": [true|false],
-    "zero_param_group_size": 1
+    "zero_param_group_size": 1,
+    "quantized_weights": [true|false]
     }
 }
 """
@@ -268,6 +269,11 @@ class DeepSpeedZeroConfig(DeepSpeedConfigModel):
     zero_param_group_size: int = Field(1e6, ge=1)
     """
     Number of ranks in zero parameters partitioning secondary group
+    """
+    zero_quantized_weights: bool = False
+    """
+    Boolean indicating whether to quantized zero parameters (weights)
+    for efficient all_gather comm
     """
 
     # Validators
