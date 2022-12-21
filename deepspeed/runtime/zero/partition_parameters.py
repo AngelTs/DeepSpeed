@@ -936,7 +936,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             # fetches from nvme if the partition is not available and in nvme
             self._ensure_availability_of_partitioned_params(params)
 
-            quant = self.zero_quantized_weights
+            quant = self.quantized_weights
 
             for param in params:
                 if param.ds_status != ZeroParamStatus.NOT_AVAILABLE:
