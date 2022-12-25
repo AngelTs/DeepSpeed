@@ -1179,8 +1179,8 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         #torch.cuda.synchronize()
         #dist.barrier()
         #reduce_scatter_start = time.time()
-        grad_partitions_for_rank = reduce_scatter_coalesced(full_grads_for_rank, 
-                                                                self.dp_process_group)
+        #grad_partitions_for_rank = reduce_scatter_coalesced(full_grads_for_rank, 
+        #                                                        self.dp_process_group)
         #torch.cuda.synchronize()
         #dist.barrier()
         #reduce_scatter_end = time.time()
