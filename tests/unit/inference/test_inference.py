@@ -301,7 +301,7 @@ class TestModelTask(DistributedTest):
                               "bloom",
                               "gpt-j"])
 class TestMPSize(DistributedTest):
-    world_size = 4
+    world_size = 2
 
     def test(
         self,

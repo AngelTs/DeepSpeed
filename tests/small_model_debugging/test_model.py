@@ -5,20 +5,26 @@ import torch
 import deepspeed
 from torch.utils.data.distributed import DistributedSampler
 import deepspeed.comm as dist
+#from quantize_linear_layer import QuantizeLinear
+import torch.nn.functional as F
 
 
 class SimpleModel(torch.nn.Module):
     def __init__(self, hidden_dim, empty_grad=False):
         super(SimpleModel, self).__init__()
-        self.linear = torch.nn.Linear(hidden_dim, hidden_dim)
+        self.linear = torch.nn.Linear(hidden_dim, hidden_dim, bias=True)
+        self.linear = torch.nn.Linear(hidden_dim, hidden_dim, bias=False)
+        #.linear = QuantizeLinear(hidden_dim, hidden_dim)
         if empty_grad:
-            self.layers2 = torch.nn.ModuleList([torch.nn.Linear(hidden_dim, hidden_dim)])
+            self.layers2 = torch.nn.ModuleList([torch.nn.Linear(hidden_dim, hidden_dim)])  #QuantizeLinear(hidden_dim, hidden_dim)
+            #self.layers2 = torch.nn.ModuleList([QuantizeLinear(hidden_dim, hidden_dim)])
         self.cross_entropy_loss = torch.nn.CrossEntropyLoss()
 
     def forward(self, x, y):
         hidden = x
-        hidden = self.linear(hidden)
-        return self.cross_entropy_loss(hidden, y)
+        hidden1 = self.linear(hidden)
+        hidden2 = self.linear(hidden1)
+        return self.cross_entropy_loss(hidden2, y)
 
 
 def create_config_from_dict(tmpdir, config_dict):
@@ -79,7 +85,7 @@ config_dict = {
     },
     "fp16": {
         "enabled": True,
-        "initial_scale_power": 15
+        "initial_scale_power": 8
     },
     "zero_optimization": {
         "stage": 0,
@@ -106,10 +112,11 @@ def print_params(tag, model):
 
 
 data_loader = get_data_loader(model=model,
-                              total_samples=1000,
+                              total_samples=256,
                               hidden_dim=hidden_dim,
                               device=model.device)
 #print_params('pre-train', model)
+
 for n, batch in enumerate(data_loader):
     loss = model(batch[0], batch[1])
     if dist.get_rank() == 0:
@@ -117,4 +124,4 @@ for n, batch in enumerate(data_loader):
     model.backward(loss)
     model.step()
     #print_params('step={}'.format(n), model)
-    if n == 5: break
+    #if n == 5: break

@@ -218,19 +218,19 @@ class InferenceEngine(Module):
                         self.expert_mp_group.update({moe_ep_size: _expert_mp_group})
 
     def _init_quantization_setting(self, quantization_setting):
-        self.quantize_bits = 8
         self.mlp_extra_grouping = False
         self.quantize_groups = 1
         if type(quantization_setting) is tuple:
-            self.mlp_extra_grouping, \
-            self.quantize_groups = quantization_setting
+            self.mlp_extra_grouping, self.quantize_groups = quantization_setting
         elif quantization_setting is not None:
             self.quantize_groups = quantization_setting
         log_dist(
-            f"quantize_bits = {self.quantize_bits} "
+            f"quantize={self.quantize}, "
+            f"quantize_bits = {self.quantize_bits}, "
             f"mlp_extra_grouping = {self.mlp_extra_grouping}, "
             f"quantize_groups = {self.quantize_groups}",
-            [0])
+            [0],
+        )
 
     # TODO: remove this function and add this functionality to pydantic config checking
     def _validate_args(self, mpu, replace_with_kernel_inject):

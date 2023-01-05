@@ -43,6 +43,27 @@ def load_model_with_checkpoint(r_module,
         gc.collect()
 
     def load_transformer_layer(module, prefix):
+        def _transpose(x, mp_size=1):
+            num_attention_heads_per_partition = transformer_config.heads // mp_size
+            attention_head_size = x.shape[-1] // num_attention_heads_per_partition
+            new_x_shape = x.size()[:-1] + (num_attention_heads_per_partition,
+                                           attention_head_size)
+            x_1 = x.view(*new_x_shape)
+            (q, k, v) = torch.split(x_1, (x_1.shape[-1] // 3), dim=(x_1.dim() - 1))
+            if len(q.shape) > 2:
+                return torch.cat((q.reshape(q.shape[0],
+                                            -1),
+                                  k.reshape(q.shape[0],
+                                            -1),
+                                  v.reshape(q.shape[0],
+                                            -1)),
+                                 dim=-1).reshape(x.shape)
+            else:
+                return torch.cat((q.reshape(-1),
+                                  k.reshape(-1),
+                                  v.reshape(-1)),
+                                 dim=-1).reshape(x.shape)
+
         if ckpt_type == "tp":
 
             def load_parameters(module, prefix):
@@ -59,6 +80,11 @@ def load_model_with_checkpoint(r_module,
                         dst_shape = p.shape
                         inner_dim = 1 if tmp_data.dtype == torch.int8 else 0
                         outer_dim = 0 if tmp_data.dtype == torch.int8 else 1
+                        qkv = 'attn_qkvw' in n or 'attn_qkvb' in n
+                        if qkv:
+                            tmp_data = _transpose(
+                                tmp_data,
+                                transformer_config.mp_size).contiguous()
                         if (len(src_shape) == 2 and len(dst_shape) == 2):
                             if (src_shape[inner_dim] == dst_shape[0]
                                     and src_shape[outer_dim] == dst_shape[1]):
@@ -112,7 +138,8 @@ def load_model_with_checkpoint(r_module,
 
                                 if tmp_data.dtype != torch.int8:
                                     weight_partition = weight_quantizer.quantize(
-                                        transpose(weight_partition), \
+                                        transpose(_transpose(weight_partition,
+                                                             transformer_config.mp_size) if qkv else weight_partition), \
                                         parallel_dim=(0 if dim == 1 else 1)) if weight_quantizer.q_int8 else \
                                         weight_quantizer.quantize(weight_partition)
                                 else:
@@ -132,11 +159,14 @@ def load_model_with_checkpoint(r_module,
                                             torch.cuda.current_device()).contiguous()
                                     p.data.copy_(bias_split)
                                 else:
+                                    tmp_data = torch.cat(
+                                        [sd[j][prefix + n] for j in range(len(sd))],
+                                        dim=0).to(
+                                            torch.cuda.current_device()).contiguous()
                                     p.data.copy_(
-                                        torch.cat(
-                                            [sd[j][prefix + n] for j in range(len(sd))],
-                                            dim=0).to(torch.cuda.current_device()).
-                                        contiguous())
+                                        _transpose(tmp_data,
+                                                   transformer_config.mp_size
+                                                   ) if qkv else tmp_data)
 
             load_parameters(module, prefix)
             for n, child in module.named_children():

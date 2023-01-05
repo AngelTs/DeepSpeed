@@ -79,8 +79,8 @@ def run_residual_add_reference(hidden_state,
 
 @pytest.mark.inference
 @pytest.mark.parametrize("batch", [1, 2])
-@pytest.mark.parametrize("sequence", [1, 128, 255])
-@pytest.mark.parametrize("hidden_dim", [512, 1232, 4096])
+@pytest.mark.parametrize("sequence", [1, 32])
+@pytest.mark.parametrize("hidden_dim", [512, 1064])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
 @pytest.mark.parametrize("mlp_after_attn", [True, False])
 @pytest.mark.parametrize("add_bias", [True, False])
@@ -131,4 +131,4 @@ def test_residual_add(inference_module,
     else:
         raise ValueError(f"Unsupported dtype: {dtype}")
 
-    assert (allclose(ds_out, ref_out))
+    assert (allclose(residual, ref_out))

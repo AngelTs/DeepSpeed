@@ -1102,6 +1102,7 @@ class DeepSpeedEngine(Module):
                 module.set_deepspeed_parallelism()
 
         # Query the groups module to get information about various parallel groups
+        self.local_all_to_all_group = groups._get_local_all_to_all_group()
         self.data_parallel_group = groups._get_data_parallel_group()
         self.dp_world_size = groups._get_data_parallel_world_size()
         self.mp_world_size = groups._get_model_parallel_world_size()
@@ -1531,6 +1532,7 @@ class DeepSpeedEngine(Module):
                     param_persistence_threshold=self.zero_param_persistence_threshold(),
                     model_persistence_threshold=self.zero_model_persistence_threshold(),
                     dp_process_group=self.data_parallel_group,
+                    all2all_process_group=self.local_all_to_all_group,
                     reduce_scatter=self.zero_reduce_scatter(),
                     overlap_comm=self.zero_overlap_comm(),
                     offload_optimizer_config=self.zero_offload_optimizer(),

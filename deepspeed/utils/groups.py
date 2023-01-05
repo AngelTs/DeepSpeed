@@ -25,7 +25,7 @@ Copyright 2021 The Microsoft DeepSpeed Team
 """
 
 from deepspeed import comm as dist
-
+import torch.cuda
 from deepspeed.utils import logger, log_dist
 from deepspeed.utils.exceptions import DeprecatedException
 
@@ -41,7 +41,8 @@ _ZERO_PARAM_INTRA_PARALLEL_GROUP = None
 mpu = None
 # global object that stores tensor parallel world size for experts
 expert_tensor_parallel_world_size = 1
-
+# All to All quantized graident communication groups
+_ALL_TO_ALL_GROUP = {}
 
 # Deprecated groups initialize function.
 def initialize(ep_size=1, mpu=None):
@@ -324,6 +325,39 @@ def _clone_world_group():
         _WORLD_GROUP = dist.new_group(ranks=range(dist.get_world_size()))
     return _WORLD_GROUP
 
+
+def _get_local_all_to_all_group():
+    assert dist.is_initialized(), \
+        'dist is not initialized'
+    global _ALL_TO_ALL_GROUP
+    device_per_node = torch.cuda.device_count()
+    num_local = dist.get_world_size()//device_per_node
+    if num_local == 0 and dist.get_world_size()>0:
+        assert  dist.get_world_size()>=1, \
+            'num_gpus must >=1, cannot initialize All-To-All'
+        cur_rank = []
+        for i in range(dist.get_world_size()):
+            cur_rank.append(i)
+        _ALL_TO_ALL_GROUP['local_0'] = dist.new_group(ranks=cur_rank)
+    elif num_local==1:
+        assert dist.get_world_size()==device_per_node, \
+            'num_gpus not equal to device per node, cannot initialize All-To-All'
+        _ALL_TO_ALL_GROUP['local_0'] = dist.new_group(ranks=[i for i in range (device_per_node)])
+    else:
+        assert dist.get_world_size()>device_per_node, \
+            'num_nodes<2 cannot initialize All-To-All'
+        for i in range(num_local):
+            local_rank = [j+device_per_node*i for j in range (device_per_node)]
+            print(f"guanhua local rank {i} is {local_rank}\n")
+            _ALL_TO_ALL_GROUP[f"local_{i}"] = dist.new_group(ranks=local_rank)
+        
+        for i in range(device_per_node):
+            cur_rank = []
+            for j in range(num_local):
+                cur_rank.append(i+j*device_per_node)
+            _ALL_TO_ALL_GROUP[f"global_{i}"] = dist.new_group(ranks=cur_rank)      
+            print(f"guanhua global rank {i} is {cur_rank}\n")
+    return _ALL_TO_ALL_GROUP
 
 def _get_data_parallel_group():
     """Get the data parallel group the caller rank belongs to."""

@@ -31,7 +31,7 @@ class ReplaceWithTensorSlicing:
             for merging your checkpoints before replacing the transformer layer with\
             inference-kernels'
 
-    def qkv_copy(self, dst, src):
+    def qkv_copy(self, dst, src, q_int=False):
         if src is None:
             return src
         src_shape = src.shape
@@ -44,19 +44,19 @@ class ReplaceWithTensorSlicing:
         else:
             src_split = torch.split(src.data, src.shape[-1] // 3, dim=-1)
         if (len(src_shape) == 2 and len(dst_shape) == 2):
-            if src_shape[self.out_dim] == dst_shape[self.out_dim]:
-                return torch.nn.parameter.Parameter(src)
-            if self.out_dim == 1:
-                self.merge_assert(src_shape[self.out_dim], dst_shape[self.out_dim])
+            if src_shape[outer_dim] == dst_shape[self.out_dim]:
+                dst = src
+            elif self.out_dim == 1:
+                self.merge_assert(src_shape[outer_dim], dst_shape[self.out_dim])
                 qkv_size = dst_shape[self.out_dim] // 3
                 qkv_split = [
                     torch.split(src_s,
                                 qkv_size,
-                                dim=self.out_dim) for src_s in src_split
+                                dim=outer_dim) for src_s in src_split
                 ]
                 weight_split = [
                     torch.cat([qkv_s[i] for qkv_s in qkv_split],
-                              axis=self.out_dim) for i in range(len(qkv_split[0]))
+                              axis=outer_dim) for i in range(len(qkv_split[0]))
                 ]
                 dst.data.copy_(weight_split[self.gpu_index].to(
                     torch.cuda.current_device()).contiguous())
@@ -65,8 +65,8 @@ class ReplaceWithTensorSlicing:
                     torch.cuda.current_device()).contiguous())
         else:
             if src_shape[0] == dst_shape[0]:
-                return torch.nn.parameter.Parameter(src)
-            if self.out_dim == 1:
+                dst = src
+            elif self.out_dim == 1:
                 qkv_size = dst_shape[0] // 3
                 qkv_split = [torch.split(src_s, qkv_size, dim=0) for src_s in src_split]
                 bias_split = [
@@ -78,32 +78,37 @@ class ReplaceWithTensorSlicing:
             else:
                 dst.data.copy_(src_split[self.gpu_index].to(
                     torch.cuda.current_device()).contiguous())
+        dst = torch.nn.parameter.Parameter(dst, requires_grad=False)
+        if hasattr(src, 'scale'):
+            dst.scale = src.scale
+        return dst
 
-        return torch.nn.parameter.Parameter(dst)
-
-    def copy(self, dst, src):
+    def copy(self, dst, src, q_int=False):
         if src is None:
             return src
+        inner_dim = 1 if q_int else 0
+        outer_dim = 0 if q_int else 1
         src_shape = src.shape
         dst_shape = dst.shape
         if (len(src_shape) == 2 and len(dst_shape) == 2):
 
-            if src_shape[0] == dst_shape[0] and src_shape[1] == dst_shape[1]:
-                dst.data.copy_(src)
+            if src_shape[inner_dim] == dst_shape[
+                    self.in_dim] and src_shape[outer_dim] == dst_shape[self.out_dim]:
+                dst = src
             else:
-                if src_shape[self.in_dim] != dst_shape[self.in_dim]:
-                    self.merge_assert(src_shape[self.in_dim], dst_shape[self.in_dim])
+                if src_shape[inner_dim] != dst_shape[self.in_dim]:
+                    self.merge_assert(src_shape[inner_dim], dst_shape[self.in_dim])
                     weight_split = torch.split(
                         src,
                         dst_shape[self.in_dim],
-                        dim=self.in_dim)[self.gpu_index].to(
+                        dim=inner_dim)[self.gpu_index].to(
                             torch.cuda.current_device()).contiguous()
                 else:
-                    self.merge_assert(src_shape[self.out_dim], dst_shape[self.out_dim])
+                    self.merge_assert(src_shape[outer_dim], dst_shape[self.out_dim])
                     weight_split = torch.split(
                         src.data,
                         dst_shape[self.out_dim],
-                        dim=self.out_dim)[self.gpu_index].to(
+                        dim=outer_dim)[self.gpu_index].to(
                             torch.cuda.current_device()).contiguous()
                 dst.data.copy_(weight_split.contiguous())
         else:
@@ -135,14 +140,40 @@ def get_transformer_name(replaced_module):
     return transformer_name
 
 
+def packInt4(input, output=None):
+    assert input.dtype == torch.int8, "input to packInt4 must be torch.int8"
+    packed_size = 2
+    nbits = 4
+    dim = -1
+    shape = list(input.shape)
+
+    def ceil(n):
+        return int(-1 * n // 1 * -1)
+
+    shape[dim] = int(ceil(shape[dim] / packed_size))
+    output = (output.zero_() if output is not None else torch.zeros(shape,
+                                                                    device=input.device,
+                                                                    dtype=torch.int8))
+    assert tuple(output.shape) == tuple(shape)
+
+    sliced_input = input[(slice(None), ) + (slice(0, None, packed_size), )]
+    compress0 = torch.bitwise_left_shift(sliced_input, 4)
+
+    sliced_input = input[(slice(None), ) + (slice(1, None, packed_size), )]
+    compress1 = torch.bitwise_and(sliced_input, 15)
+
+    output = output.narrow(dim, 0, sliced_input.shape[dim])
+    output = torch.bitwise_or(compress0, compress1)
+    return output
+
 class GroupQuantizer:
     def __init__(self, q_int8=True, group_size=1, num_bits=8):
         self.group_size = group_size
         self.num_bits = num_bits
-        self.q_int8 = q_int8
+        self.q_int = q_int
 
-    def quantize(self, inputs, qkv=True, count=1, parallel_dim=0):
-        if not self.q_int8 or not qkv:
+    def quantize(self, inputs, qkv=True, parallel_dim=0, force_int8=False):
+        if not self.q_int or not qkv:
             inputs = torch.nn.Parameter(inputs, requires_grad=False)
             inputs.scale = torch.empty(1)
             return inputs
@@ -155,8 +186,9 @@ class GroupQuantizer:
         scale = torch.max(input_min.abs(), input_max.abs()) * 2.0 / (q_range)
         input_flat = (input_flat / scale).round().clamp(-q_range // 2, q_range // 2 - 1)
         inputs_q = input_flat.reshape(inputs.shape).to(torch.int8).contiguous()
+        if num_bits == 4:
+            inputs_q = packInt4(inputs_q)
         out = torch.nn.Parameter(inputs_q, requires_grad=False)
-        #print(inputs.shape)
         inputs_split = inputs.split(inputs.shape[parallel_dim] // 2, dim=parallel_dim)
         input_flat = [
             inputs_split[i].reshape(num_groups,
@@ -183,6 +215,7 @@ class GroupQuantizer:
                                scale1[1]],
                               dim=0).reshape(num_groups,
                                              -1).contiguous()
+        # print(f"inputs.shape = {inputs.shape}, out.shape: {out.shape}, out.scale.shape: {out.scale.shape}")
         return out
 
 
@@ -387,7 +420,13 @@ def replace_transformer_layer(orig_layer_impl,
             _res_4hh_w = _res_4hh_w.half()
             _res_coef = _res_coef.half()
 
-        #expert_mp_replace = ReplaceWithTensorSlicing(mp_group=expert_mp_group)
+        assert quantize_settings, "quantize_settings is None"
+        (
+            quantization_scales,
+            merge_count,
+            mlp_extra_grouping,
+            quantize_groups,
+        ) = quantize_settings
 
         quantizer = GroupQuantizer(q_int8=quantize)
         if inference:
@@ -493,13 +532,21 @@ def replace_transformer_layer(orig_layer_impl,
                                                  qkvb,
                                                  dense_b],
                                                 modifier_rank=0):
-                            qkvw = transpose(qkvw.data)
-                            dense_w = transpose(dense_w.data)
+                            if not enable_qkv_quantization:
+                                qkvw = transpose(qkvw.data)
+                            if not quantize:
+                                dense_w = transpose(dense_w.data)
                             qkvb = qkvb.data
                             dense_b = dense_b.data
                 else:
-                    qkvw.data = transpose(qkvw.data)
-                    dense_w.data = transpose(dense_w.data)
+                    if not enable_qkv_quantization:
+                        qkvw.data = transpose(qkvw.data)
+                    if not quantize:
+                        dense_w.data = transpose(dense_w.data)
+            elif quantize:
+                qkvw.data = transpose(
+                    qkvw.data) if enable_qkv_quantization else qkvw.data
+                dense_w.data = transpose(dense_w.data)
 
             def _transpose(x):
                 attention_head_size = x.shape[-1] // transformer_config.heads
@@ -521,10 +568,9 @@ def replace_transformer_layer(orig_layer_impl,
                                       v.reshape(-1)),
                                      dim=-1).reshape(x.shape)
 
-            if megatron_v2:
+            if megatron_v2 or (bigscience_bloom and not qkvw.is_meta):
                 new_module.config.rotate_half = True
                 new_module.config.rotate_every_two = False
-
                 # Note: this part needs to be added for BLOOM architecture
                 qkvw = torch.nn.parameter.Parameter(_transpose(qkvw).contiguous())
                 qkvb = torch.nn.parameter.Parameter(_transpose(qkvb).contiguous())
@@ -547,8 +593,10 @@ def replace_transformer_layer(orig_layer_impl,
                                                  _4hh_b,
                                                  _h4h_b],
                                                 modifier_rank=0):
-                            _h4h_w = transpose(_h4h_w.data)
-                            _4hh_w = transpose(_4hh_w.data)
+
+                            if not quantize:
+                                _h4h_w = transpose(_h4h_w.data)
+                                _4hh_w = transpose(_4hh_w.data)
                             _h4h_b = _h4h_b.data
                             _4hh_b = _4hh_b.data
                 else:
@@ -587,16 +635,17 @@ def replace_transformer_layer(orig_layer_impl,
                         attn_block.attn_ow = mp_replace.copy(attn_block.attn_ow, dense_w)
                         attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
             else:
-                attn_block.attn_qkvw = quantizer.quantize(
-                    mp_replace.copy(attn_block.attn_qkvw, qkvw) if bigscience_bloom else \
-                    mp_replace.qkv_copy(attn_block.attn_qkvw, qkvw))
+                attn_block.attn_qkvw = quantizer.quantize(mp_replace.qkv_copy(
+                    attn_block.attn_qkvw,
+                    qkvw,
+                    q_int=enable_qkv_quantization), qkv=enable_qkv_quantization, force_int8=False)
                 attn_block.attn_qkvb = \
-                    mp_replace.copy(attn_block.attn_qkvb, qkvb) if bigscience_bloom else \
                     mp_replace.qkv_copy(attn_block.attn_qkvb, qkvb)
 
                 attn_block.attn_ow = quantizer.quantize(
                     mp_replace.copy(attn_block.attn_ow,
-                                    dense_w))
+                                    dense_w,
+                                    q_int=quantize), force_int8=False)
 
                 attn_block.attn_ob = mp_replace.copy(attn_block.attn_ob, dense_b)
 
@@ -629,7 +678,6 @@ def replace_transformer_layer(orig_layer_impl,
                         torch.cuda.current_device())
                     new_module.res_coef.data = _res_coef.to(torch.cuda.current_device())
             else:
-
                 if _4hh_w.numel() == 0 or _4hh_w.is_meta:
                     if _4hh_w.is_meta or _4hh_w.ds_tensor.numel(
                     ) < mpl_block.inter_w.numel():
@@ -655,11 +703,13 @@ def replace_transformer_layer(orig_layer_impl,
                 else:
                     mpl_block.inter_w = quantizer.quantize(
                         mp_replace.copy(mpl_block.inter_w,
-                                        _h4h_w))
+                                        _h4h_w,
+                                        q_int=quantize), force_int8=False)
                     mpl_block.inter_b = mp_replace.copy(mpl_block.inter_b, _h4h_b)
                     mpl_block.output_w = quantizer.quantize(
                         mp_replace.copy(mpl_block.output_w,
-                                        _4hh_w))
+                                        _4hh_w,
+                                        q_int=quantize), force_int8=False)
                     mpl_block.output_b = mp_replace.copy(mpl_block.output_b, _4hh_b)
 
                 if attn_nw is None:
@@ -744,7 +794,7 @@ def replace_transformer_layer(orig_layer_impl,
                 weight_shape = child.weight.ds_shape
             else:
                 weight_shape = child.weight.shape
-            if name in all_reduce_linears:
+            if isinstance(all_reduce_linears, dict) and name in all_reduce_linears:
                 new_weight = torch.empty((
                     weight_shape[1] if conv_linear_layer else weight_shape[0],
                     (weight_shape[0] if conv_linear_layer else weight_shape[1]) //
@@ -898,7 +948,7 @@ def replace_transformer_layer(orig_layer_impl,
                                      replace_fn=replace_fn,
                                      _replace_policy=config.injection_policy_tuple)
 
-    quantizer = GroupQuantizer(q_int8=quantize)
+    quantizer = GroupQuantizer(q_int=quantize, num_bits=quantize_bits)
     world_size = dist.get_world_size() if dist.is_initialized() else 1
     rank = dist.get_rank() if dist.is_initialized() else 0
     if checkpoint_dict is not None:
@@ -933,7 +983,7 @@ def replace_transformer_layer(orig_layer_impl,
         else:
             import gc
             num_checkpoints = len(ckpt_list) // ckpt_mp_size
-            tp_split_size = (world_size / ckpt_mp_size)
+            tp_split_size = world_size / ckpt_mp_size
             sd_offset = int(rank / tp_split_size)
             sd_count = int((rank + max(1, tp_split_size)) / tp_split_size) - sd_offset
             pbar = tqdm.tqdm(total=num_checkpoints,

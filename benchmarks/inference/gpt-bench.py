@@ -8,26 +8,32 @@ from transformers import pipeline
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", "-m", type=str, help="hf model name")
 parser.add_argument("--deepspeed", action="store_true", help="use deepspeed inference")
-parser.add_argument("--dtype",
-                    type=str,
-                    default="fp16",
-                    choices=["fp16",
-                             "fp32",
-                             "int8"],
-                    help="int8, fp16, or fp32")
+parser.add_argument(
+    "--dtype",
+    type=str,
+    default="fp16",
+    choices=["fp16",
+             "fp32",
+             "int8"],
+    help="int8, fp16, or fp32",
+)
 parser.add_argument("--graphs", action="store_true", help="CUDA Graphs on")
 parser.add_argument("--kernel-inject", action="store_true", help="inject kernels on")
 parser.add_argument("--max-tokens", type=int, default=50, help="max new tokens")
-parser.add_argument("--local_rank",
-                    type=int,
-                    default=int(os.getenv("LOCAL_RANK",
-                                          "0")),
-                    help="local rank")
-parser.add_argument("--world_size",
-                    type=int,
-                    default=int(os.getenv("WORLD_SIZE",
-                                          "1")),
-                    help="world size")
+parser.add_argument(
+    "--local_rank",
+    type=int,
+    default=int(os.getenv("LOCAL_RANK",
+                          "0")),
+    help="local rank",
+)
+parser.add_argument(
+    "--world_size",
+    type=int,
+    default=int(os.getenv("WORLD_SIZE",
+                          "1")),
+    help="world size",
+)
 parser.add_argument("--trials", type=int, default=30, help="number of trials")
 args = parser.parse_args()
 

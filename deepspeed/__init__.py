@@ -1,6 +1,6 @@
-'''
+"""
 Copyright 2020 The Microsoft DeepSpeed Team
-'''
+"""
 
 import sys
 import types
@@ -14,7 +14,11 @@ from packaging import version as pkg_version
 from . import ops
 from . import module_inject
 
-from .runtime.engine import DeepSpeedEngine, DeepSpeedOptimizerCallable, DeepSpeedSchedulerCallable
+from .runtime.engine import (
+    DeepSpeedEngine,
+    DeepSpeedOptimizerCallable,
+    DeepSpeedSchedulerCallable,
+)
 from .runtime.engine import ADAM_OPTIMIZER, LAMB_OPTIMIZER
 from .runtime.pipe.engine import PipelineEngine
 from .inference.engine import InferenceEngine
@@ -37,7 +41,7 @@ from .git_version_info import version, git_hash, git_branch
 
 
 def _parse_version(version_str):
-    '''Parse a version string and extract the major, minor, and patch versions.'''
+    """Parse a version string and extract the major, minor, and patch versions."""
     ver = pkg_version.parse(version_str)
     return ver.major, ver.minor, ver.micro
 
@@ -49,19 +53,21 @@ __git_hash__ = git_hash
 __git_branch__ = git_branch
 
 
-def initialize(args=None,
-               model: torch.nn.Module = None,
-               optimizer: Optional[Union[Optimizer,
-                                         DeepSpeedOptimizerCallable]] = None,
-               model_parameters: Optional[torch.nn.Module] = None,
-               training_data: Optional[torch.utils.data.Dataset] = None,
-               lr_scheduler: Optional[Union[_LRScheduler,
-                                            DeepSpeedSchedulerCallable]] = None,
-               mpu=None,
-               dist_init_required: Optional[bool] = None,
-               collate_fn=None,
-               config=None,
-               config_params=None):
+def initialize(
+    args=None,
+    model: torch.nn.Module = None,
+    optimizer: Optional[Union[Optimizer,
+                              DeepSpeedOptimizerCallable]] = None,
+    model_parameters: Optional[torch.nn.Module] = None,
+    training_data: Optional[torch.utils.data.Dataset] = None,
+    lr_scheduler: Optional[Union[_LRScheduler,
+                                 DeepSpeedSchedulerCallable]] = None,
+    mpu=None,
+    dist_init_required: Optional[bool] = None,
+    collate_fn=None,
+    config=None,
+    config_params=None,
+):
     """Initialize the DeepSpeed Engine.
 
     Arguments:
@@ -110,11 +116,13 @@ def initialize(args=None,
         * ``lr_scheduler``: Wrapped lr scheduler if user ``lr_scheduler`` is passed, or
           if ``lr_scheduler`` specified in JSON configuration. Otherwise ``None``.
     """
-    log_dist("DeepSpeed info: version={}, git-hash={}, git-branch={}".format(
-        __version__,
-        __git_hash__,
-        __git_branch__),
-             ranks=[0])
+    log_dist(
+        "DeepSpeed info: version={}, git-hash={}, git-branch={}".format(
+            __version__,
+            __git_hash__,
+            __git_branch__),
+        ranks=[0],
+    )
 
     # Disable zero.Init context if it's currently enabled
     zero.partition_parameters.shutdown_init_context()
@@ -122,36 +130,40 @@ def initialize(args=None,
     assert model is not None, "deepspeed.initialize requires a model"
 
     if not isinstance(model, PipelineModule):
-        engine = DeepSpeedEngine(args=args,
-                                 model=model,
-                                 optimizer=optimizer,
-                                 model_parameters=model_parameters,
-                                 training_data=training_data,
-                                 lr_scheduler=lr_scheduler,
-                                 mpu=mpu,
-                                 dist_init_required=dist_init_required,
-                                 collate_fn=collate_fn,
-                                 config=config,
-                                 config_params=config_params)
+        engine = DeepSpeedEngine(
+            args=args,
+            model=model,
+            optimizer=optimizer,
+            model_parameters=model_parameters,
+            training_data=training_data,
+            lr_scheduler=lr_scheduler,
+            mpu=mpu,
+            dist_init_required=dist_init_required,
+            collate_fn=collate_fn,
+            config=config,
+            config_params=config_params,
+        )
     else:
         assert mpu is None, "mpu must be None with pipeline parallelism"
-        engine = PipelineEngine(args=args,
-                                model=model,
-                                optimizer=optimizer,
-                                model_parameters=model_parameters,
-                                training_data=training_data,
-                                lr_scheduler=lr_scheduler,
-                                mpu=model.mpu(),
-                                dist_init_required=dist_init_required,
-                                collate_fn=collate_fn,
-                                config=config,
-                                config_params=config_params)
+        engine = PipelineEngine(
+            args=args,
+            model=model,
+            optimizer=optimizer,
+            model_parameters=model_parameters,
+            training_data=training_data,
+            lr_scheduler=lr_scheduler,
+            mpu=model.mpu(),
+            dist_init_required=dist_init_required,
+            collate_fn=collate_fn,
+            config=config,
+            config_params=config_params,
+        )
 
     return_items = [
         engine,
         engine.optimizer,
         engine.training_dataloader,
-        engine.lr_scheduler
+        engine.lr_scheduler,
     ]
     return tuple(return_items)
 
@@ -169,40 +181,46 @@ def _add_core_arguments(parser):
     Return:
         parser: Updated Parser
     """
-    group = parser.add_argument_group('DeepSpeed', 'DeepSpeed configurations')
+    group = parser.add_argument_group("DeepSpeed", "DeepSpeed configurations")
 
     group.add_argument(
-        '--deepspeed',
+        "--deepspeed",
         default=False,
-        action='store_true',
+        action="store_true",
         help=
-        'Enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)')
-
-    group.add_argument('--deepspeed_config',
-                       default=None,
-                       type=str,
-                       help='DeepSpeed json configuration file.')
-
-    group.add_argument(
-        '--deepscale',
-        default=False,
-        action='store_true',
-        help=
-        'Deprecated enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)'
+        "Enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)",
     )
 
-    group.add_argument('--deepscale_config',
-                       default=None,
-                       type=str,
-                       help='Deprecated DeepSpeed json configuration file.')
+    group.add_argument(
+        "--deepspeed_config",
+        default=None,
+        type=str,
+        help="DeepSpeed json configuration file.",
+    )
 
     group.add_argument(
-        '--deepspeed_mpi',
+        "--deepscale",
         default=False,
-        action='store_true',
+        action="store_true",
+        help=
+        "Deprecated enable DeepSpeed (helper flag for user code, no impact on DeepSpeed backend)",
+    )
+
+    group.add_argument(
+        "--deepscale_config",
+        default=None,
+        type=str,
+        help="Deprecated DeepSpeed json configuration file.",
+    )
+
+    group.add_argument(
+        "--deepspeed_mpi",
+        default=False,
+        action="store_true",
         help=
         "Run via MPI, this will attempt to discover the necessary variables to initialize torch "
-        "distributed from the MPI environment")
+        "distributed from the MPI environment",
+    )
 
     return parser
 
@@ -278,11 +296,13 @@ def init_inference(model, config=None, **kwargs):
     Returns:
         A deepspeed.InferenceEngine wrapped model.
     """
-    log_dist("DeepSpeed info: version={}, git-hash={}, git-branch={}".format(
-        __version__,
-        __git_hash__,
-        __git_branch__),
-             ranks=[0])
+    log_dist(
+        "DeepSpeed info: version={}, git-hash={}, git-branch={}".format(
+            __version__,
+            __git_hash__,
+            __git_branch__),
+        ranks=[0],
+    )
 
     # Load config_dict from config first
     if config is None:
