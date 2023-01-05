@@ -97,7 +97,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                  dp_process_group=None,
                  all2all_process_group=None,
                  reduce_scatter=True,
-                 all_to_all_reduce = True,
+                 all_to_all_reduce = False,
                  overlap_comm=False,
                  offload_optimizer_config=None,
                  offload_param_config=None,
@@ -160,7 +160,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         self.zero_param_group_size = zero_param_group_size
 
         zpg = groups._get_zero_param_intra_parallel_group()
-        print_rank_0(f"SAGE STAGE3 ZPG {self.zero_param_group_size} {zpg}", force=True)
+        print_rank_0(f"STAGE3 ZPG {self.zero_param_group_size} {zpg}", force=True)
         if self.zero_param_group_size > 1 and zpg is None:
             self._set_zero_group_parallelism()
             zpg = groups._get_zero_param_intra_parallel_group()
@@ -1192,8 +1192,13 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         #torch.cuda.synchronize()
         #dist.barrier()
         #all2all_start = time.time()
-        grad_partitions_for_rank = all_to_all_quant_reduce(full_grads_for_rank, 
+        if self.all_to_all_reduce:
+            grad_partitions_for_rank = all_to_all_quant_reduce(full_grads_for_rank, 
                                             self.all2all_process_group)
+        else:
+            grad_partitions_for_rank = reduce_scatter_coalesced(full_grads_for_rank, 
+                                                                self.dp_process_group)
+
         #torch.cuda.synchronize()
         #dist.barrier()
         #all2all_end = time.time()
