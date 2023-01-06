@@ -36,7 +36,8 @@ ZeRO optimization should be enabled as:
     "ignore_unused_parameters": [true|false],
     "round_robin_gradients": [true|false],
     "zero_param_group_size": 1,
-    "quantized_weights": [true|false]
+    "zero_quantized_weights": [true|false],
+    "zero_quantized_gradients": [true|false]
     }
 }
 """
@@ -274,6 +275,11 @@ class DeepSpeedZeroConfig(DeepSpeedConfigModel):
     """
     Boolean indicating whether to quantized zero parameters (weights)
     for efficient all_gather comm
+    """
+    zero_quantized_gradients: bool = False
+    """
+    Boolean indicating whether to use quantized zero gradients 
+    for efficient all_2_all_reduce comm
     """
 
     # Validators

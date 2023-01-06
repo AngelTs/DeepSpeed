@@ -97,7 +97,6 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                  dp_process_group=None,
                  all2all_process_group=None,
                  reduce_scatter=True,
-                 all_to_all_reduce = False,
                  overlap_comm=False,
                  offload_optimizer_config=None,
                  offload_param_config=None,
@@ -209,8 +208,6 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
 
         self.timers = timers
 
-        self.all_to_all_reduce = all_to_all_reduce
-
         self.reduce_scatter = reduce_scatter
 
         self.dp_process_group = dp_process_group
@@ -235,8 +232,8 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         self.micro_step_id = 0
         self.reduce_bucket_size = int(reduce_bucket_size)
 
-        if self.all_to_all_reduce:
-            assert self.all_to_all_reduce == True and self.reduce_scatter == True, "when enable all_to_all_reduce, reduce_scatter must be disabled"
+        if self.all2all_process_group is not None:
+            assert self.all2all_process_group is not None and self.reduce_scatter == False, "when enable all_to_all_reduce, reduce_scatter must be disabled"
 
         if self.reduce_scatter:
             assert self.communication_data_type in (torch.float16, torch.bfloat16), f"ZeRO-3 supports only float16 or bfloat16 communication_data_type with reduce scatter enabled. Got: '{self.communication_data_type}'"
@@ -1059,7 +1056,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
             for param in param_group:
                 if param.requires_grad:
                     #print_rank_0(f" Before all gather {param.device}, {param.shape}")
-                    print_rank_0(f"SAGE Before all gather {param.device}, {param.shape}",
+                    print_rank_0(f"Before all gather {param.device}, {param.shape}",
                                  force=True)
 
                     # The hook must be created in un-partitioned parameter
@@ -1192,10 +1189,12 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         #torch.cuda.synchronize()
         #dist.barrier()
         #all2all_start = time.time()
-        if self.all_to_all_reduce:
+        if self.all2all_process_group is not None:
+            print_rank_0("Using ZeRO quantized gradients", force=True)
             grad_partitions_for_rank = all_to_all_quant_reduce(full_grads_for_rank, 
                                             self.all2all_process_group)
         else:
+            print_rank_0("Using ZeRO reduce scatter", force=True)
             grad_partitions_for_rank = reduce_scatter_coalesced(full_grads_for_rank, 
                                                                 self.dp_process_group)
 
