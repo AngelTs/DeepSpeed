@@ -90,12 +90,15 @@ config_dict = {
     "zero_optimization": {
         "stage": 0,
         "reduce_bucket_size": 20,
-        "zero_param_group_size": 1
+        "zero_param_group_size": 1,
+        "reduce_scatter" : True,
+        "zero_quantized_weights": False,
+        "zero_quantized_gradients" : False
     }
 }
 #        "initial_scale_power": 15
 args = get_args('/tmp/', config_dict)
-hidden_dim = 4 * 1024
+hidden_dim = 4*1024
 
 model = SimpleModel(hidden_dim, empty_grad=False)
 

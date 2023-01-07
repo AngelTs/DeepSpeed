@@ -1105,9 +1105,9 @@ class DeepSpeedEngine(Module):
                 module.set_deepspeed_parallelism()
 
         # Query the groups module to get information about various parallel groups
-        #self.local_all_to_all_group = None
-        #if self.zero_quantized_gradients:
-        self.local_all_to_all_group = groups._get_local_all_to_all_group()
+        self.local_all_to_all_group = None
+        if self.zero_quantized_gradients():
+            self.local_all_to_all_group = groups._get_local_all_to_all_group()
         self.data_parallel_group = groups._get_data_parallel_group()
         self.dp_world_size = groups._get_data_parallel_world_size()
         self.mp_world_size = groups._get_model_parallel_world_size()
