@@ -29,7 +29,7 @@ from deepspeed.runtime.swap_tensor.pipelined_optimizer_swapper import PipelinedO
 from deepspeed.checkpoint.constants import OPTIMIZER_STATE_DICT, FP32_FLAT_GROUPS, PARTITION_COUNT, ZERO_STAGE
 from deepspeed.ops import op_builder
 
-quantizer_cuda_module = op_builder.QuantizerBuilder().load()
+#quantizer_cuda_module = op_builder.QuantizerBuilder().load()
 # Toggle this to true to enable correctness test
 # with gradient partitioning and without
 pg_correctness_test = False
@@ -96,7 +96,8 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                  model_persistence_threshold=sys.maxsize,
                  dp_process_group=None,
                  all2all_process_group=None,
-                 reduce_scatter=True,
+                 #reduce_scatter=True,
+                 reduce_scatter=False,
                  overlap_comm=False,
                  offload_optimizer_config=None,
                  offload_param_config=None,
