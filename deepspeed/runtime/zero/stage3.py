@@ -1057,7 +1057,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                 if param.requires_grad:
                     #print_rank_0(f" Before all gather {param.device}, {param.shape}")
                     print_rank_0(f"Before all gather {param.device}, {param.shape}",
-                                 force=True)
+                                 force=False)
 
                     # The hook must be created in un-partitioned parameter
                     #print_rank_0(f"SAGE PARAM STAGE3 {param} p)
@@ -1190,11 +1190,9 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         #dist.barrier()
         #all2all_start = time.time()
         if self.all2all_process_group is not None:
-            print_rank_0("Using ZeRO quantized gradients", force=True)
             grad_partitions_for_rank = all_to_all_quant_reduce(full_grads_for_rank, 
                                             self.all2all_process_group)
         else:
-            print_rank_0("Using ZeRO reduce scatter", force=True)
             grad_partitions_for_rank = reduce_scatter_coalesced(full_grads_for_rank, 
                                                                 self.dp_process_group)
 
