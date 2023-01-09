@@ -29,7 +29,7 @@ from deepspeed.runtime.swap_tensor.pipelined_optimizer_swapper import PipelinedO
 from deepspeed.checkpoint.constants import OPTIMIZER_STATE_DICT, FP32_FLAT_GROUPS, PARTITION_COUNT, ZERO_STAGE
 from deepspeed.ops import op_builder
 
-quantizer_cuda_module = op_builder.QuantizerBuilder().load()
+#quantizer_cuda_module = op_builder.QuantizerBuilder().load()
 # Toggle this to true to enable correctness test
 # with gradient partitioning and without
 pg_correctness_test = False
@@ -97,7 +97,6 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                  dp_process_group=None,
                  all2all_process_group=None,
                  reduce_scatter=True,
-                 all_to_all_reduce = True,
                  overlap_comm=False,
                  offload_optimizer_config=None,
                  offload_param_config=None,
@@ -160,7 +159,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         self.zero_param_group_size = zero_param_group_size
 
         zpg = groups._get_zero_param_intra_parallel_group()
-        print_rank_0(f"SAGE STAGE3 ZPG {self.zero_param_group_size} {zpg}", force=True)
+        print_rank_0(f"STAGE3 ZPG {self.zero_param_group_size} {zpg}", force=True)
         if self.zero_param_group_size > 1 and zpg is None:
             self._set_zero_group_parallelism()
             zpg = groups._get_zero_param_intra_parallel_group()
@@ -209,8 +208,6 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
 
         self.timers = timers
 
-        self.all_to_all_reduce = all_to_all_reduce
-
         self.reduce_scatter = reduce_scatter
 
         self.dp_process_group = dp_process_group
@@ -235,8 +232,8 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         self.micro_step_id = 0
         self.reduce_bucket_size = int(reduce_bucket_size)
 
-        if self.all_to_all_reduce:
-            assert self.all_to_all_reduce == True and self.reduce_scatter == True, "when enable all_to_all_reduce, reduce_scatter must be disabled"
+        if self.all2all_process_group is not None:
+            assert self.all2all_process_group is not None and self.reduce_scatter == False, "when enable all_to_all_reduce, reduce_scatter must be disabled"
 
         if self.reduce_scatter:
             assert self.communication_data_type in (torch.float16, torch.bfloat16), f"ZeRO-3 supports only float16 or bfloat16 communication_data_type with reduce scatter enabled. Got: '{self.communication_data_type}'"
@@ -1059,8 +1056,8 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
             for param in param_group:
                 if param.requires_grad:
                     #print_rank_0(f" Before all gather {param.device}, {param.shape}")
-                    print_rank_0(f"SAGE Before all gather {param.device}, {param.shape}",
-                                 force=True)
+                    print_rank_0(f"Before all gather {param.device}, {param.shape}",
+                                 force=False)
 
                     # The hook must be created in un-partitioned parameter
                     #print_rank_0(f"SAGE PARAM STAGE3 {param} p)
@@ -1192,8 +1189,13 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         #torch.cuda.synchronize()
         #dist.barrier()
         #all2all_start = time.time()
-        grad_partitions_for_rank = all_to_all_quant_reduce(full_grads_for_rank, 
+        if self.all2all_process_group is not None:
+            grad_partitions_for_rank = all_to_all_quant_reduce(full_grads_for_rank, 
                                             self.all2all_process_group)
+        else:
+            grad_partitions_for_rank = reduce_scatter_coalesced(full_grads_for_rank, 
+                                                                self.dp_process_group)
+
         #torch.cuda.synchronize()
         #dist.barrier()
         #all2all_end = time.time()
