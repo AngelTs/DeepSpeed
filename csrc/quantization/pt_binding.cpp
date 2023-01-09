@@ -39,11 +39,8 @@ at::Tensor ds_quantize_asym(at::Tensor& vals, int groups, int bits)
     int size = 1;
     for (auto dim : t_size) size *= dim;
 
-    if ((((size / groups) - 1) / 4096 + 1) <= MAX_REGISTERS) {
-    //SAM: merge conflic issue, check with Heyang
-    //if ((((size / groups) - 1) / 4096 + 1) <= 256) { ###Heyang
-        launch_quantize_kernel_asym(
-        //launch_fake_quantize_kernel_asym( ##Heyang
+    if ((((size / groups) - 1) / 4096 + 1) <= 256) {
+        launch_fake_quantize_kernel_asym(
             (T*)vals.data_ptr(), size, groups, bits, at::cuda::getCurrentCUDAStream());
     }
     return vals;
