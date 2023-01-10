@@ -153,7 +153,7 @@ public:
                    workSpaceSize,
                    _free_memory_size,
                    total_size);
-            throw std::runtime_error("Workspace is nullx.");
+            throw std::runtime_error("Workspace is null.");
         }
         _workSpaceSize = workSpaceSize;
         _attention_unfused_workspace_offset = workSpaceSize - temp_size;
@@ -241,11 +241,12 @@ private:
     size_t _workSpaceSize;
     size_t _free_memory_size;
 
+    size_t _max_seq_len;
+
     cudaEvent_t _comp1_event;
     cudaEvent_t _comp2_event;
 
     cudaStream_t _stream;
-    size_t _max_seq_len;
 
     unsigned _token_length;
     unsigned _num_tokens;

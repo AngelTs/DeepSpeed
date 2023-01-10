@@ -11,7 +11,7 @@ at::Tensor ds_quantize(at::Tensor& vals, int groups, int bits)
     int size = 1;
     for (auto dim : t_size) size *= dim;
 
-    if ((((size / groups) - 1) / 4096 + 1) <= 256ISTERS) {
+    if ((((size / groups) - 1) / 4096 + 1) <= 256) {
         launch_fake_quantize_kernel(
             (T*)vals.data_ptr(), size, groups, bits, at::cuda::getCurrentCUDAStream());
     }

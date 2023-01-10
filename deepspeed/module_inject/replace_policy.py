@@ -733,7 +733,7 @@ class HFOPTLayerPolicy(TransformerPolicy):
                self.use_load_prefix, \
                self.split_qkv
 
-# transformer-based policies
+
 class HFDistilBertLayerPolicy(TransformerPolicy):
     _orig_layer_class = None
 
@@ -790,6 +790,7 @@ class HFDistilBertLayerPolicy(TransformerPolicy):
                transformer_layernorm.bias
 
 
+# transformer-based policies
 replace_policies = [
     HFBertLayerPolicy,
     HFGPTNEOLayerPolicy,
@@ -800,7 +801,7 @@ replace_policies = [
     BLOOMLayerPolicy,
     HFOPTLayerPolicy,
     HFCLIPLayerPolicy,
-    HFDistilBertLayerPolicy,
+    HFDistilBertLayerPolicy
 ]
 
 # non-transformer-based policies

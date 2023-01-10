@@ -13,6 +13,8 @@ def module_inject(layer_obj,
                   fp16=True):
     for name, child in model.named_children():
         if isinstance(child, layer_obj):
+            print('REPLACING BertLayer')
+
             cuda_config = DeepSpeedTransformerConfig(
                 batch_size=micro_batch_size,
                 max_seq_length=max_seq_length,
