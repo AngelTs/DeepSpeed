@@ -108,17 +108,17 @@ void launch_fused_residual_ln(T* output,
                               cudaStream_t stream);
 
 template <typename T>
-void launch_fused_residual_ln_store(T* norm_output,
-                                    T* res_output,
-                                    const T* vals,
-                                    const T* residual,
-                                    const T* bias,
-                                    const T* gamma,
-                                    const T* beta,
-                                    float epsilon,
-                                    int rows,
-                                    int elems_per_row,
-                                    cudaStream_t stream);
+void launch_fused_residual_ln_store_pre_ln_res(T* norm_output,
+                                               T* res_output,
+                                               const T* vals,
+                                               const T* residual,
+                                               const T* bias,
+                                               const T* gamma,
+                                               const T* beta,
+                                               float epsilon,
+                                               int rows,
+                                               int elems_per_row,
+                                               cudaStream_t stream);
 
 template <typename T>
 void launch_dequantize(T* output,
