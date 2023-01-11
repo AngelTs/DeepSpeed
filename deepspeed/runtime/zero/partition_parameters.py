@@ -583,16 +583,21 @@ class CUDAQuantizer:
     def quantize(self, param, groups=None):
         if groups is None:
             try:
-                groups = self.group_size_cache[param.numel()]
+                groups=self.group_size_cache[param.numel()]
             except KeyError:
-                groups = 1
+                groups=math.ceil(param.numel() / self.target_group_size)
+                while groups<param.numel():
+                    if param.numel() % (8*groups)==0:
+                        break
+                    groups+=1
                 while True:
                     if param.numel() % (8*groups*2)==0 and param.numel() / groups > self.target_group_size: #hard limit of 16k group_size
                         groups*=2
                     else:
                         break
                 assert (param.numel() % (8*groups)==0),f"{param.numel()} cannot be divided by 8*{groups}"
-                assert (param.numel() % groups < 16000),f"{param.numel()} / {groups} is larger than 16k"
+                assert (param.numel() / groups < 16000),f"{param.numel()} / {groups} is larger than 16k"
+                assert param.numel() > groups,f"Adaptive grouping algorithm cannot find a group size for input tensor of size {param.numel()}"
                 self.group_size_cache[param.numel()]=groups
         # print(f"quantize a param of shape {param.shape} with group number {groups}")
         return self.quantizer_cuda_module.quantize(param,
