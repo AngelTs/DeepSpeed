@@ -3,7 +3,7 @@ bandwidth utilization"""
 
 import math
 from typing import List
-import time
+#import time
 import torch
 from torch import Tensor
 from deepspeed import comm as dist
