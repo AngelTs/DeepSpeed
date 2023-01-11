@@ -2,18 +2,18 @@
 "Copyright 2020 The Microsoft DeepSpeed Team.
 Licensed under the MIT license.
 """
-
+import time
 import sys
 import gc
 import collections
 from typing import Deque, Dict, Tuple
 from torch.cuda import Event, Stream
 from torch._six import inf
-
+from deepspeed import comm as dist
 from deepspeed.runtime import ZeROOptimizer
 from deepspeed.utils import logger
 from deepspeed.runtime.fp16.loss_scaler import LossScaler, DynamicLossScaler
-from deepspeed.runtime.comm.coalesced_collectives import reduce_scatter_coalesced
+from deepspeed.runtime.comm.coalesced_collectives import reduce_scatter_coalesced, all_to_all_quant_reduce
 from deepspeed.runtime.utils import get_global_norm, is_model_parallel_parameter
 from deepspeed.runtime.zero.partition_parameters import *
 from deepspeed.runtime.zero.config import ZeroStageEnum
@@ -25,7 +25,8 @@ from deepspeed.runtime.swap_tensor.partitioned_param_swapper import PartitionedP
 from deepspeed.runtime.swap_tensor.partitioned_optimizer_swapper import PartitionedOptimizerSwapper
 from deepspeed.runtime.swap_tensor.pipelined_optimizer_swapper import PipelinedOptimizerSwapper
 from deepspeed.checkpoint.constants import OPTIMIZER_STATE_DICT, FP32_FLAT_GROUPS, PARTITION_COUNT, ZERO_STAGE
-
+from deepspeed.ops import op_builder
+quantizer_cuda_module = op_builder.QuantizerBuilder().load()
 # Toggle this to true to enable correctness test
 # with gradient partitioning and without
 pg_correctness_test = False
@@ -91,7 +92,9 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                  param_persistence_threshold=100000,
                  model_persistence_threshold=sys.maxsize,
                  dp_process_group=None,
+                 all2all_process_group=None,
                  reduce_scatter=True,
+                 all_to_all_reduce=True,
                  overlap_comm=False,
                  offload_optimizer_config=None,
                  offload_param_config=None,
@@ -190,6 +193,10 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
 
         self.timers = timers
 
+        self.all_to_all_reduce = all_to_all_reduce
+
+        self.all2all_process_group = all2all_process_group
+
         self.reduce_scatter = reduce_scatter
 
         self.dp_process_group = dp_process_group
@@ -211,6 +218,9 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.micro_step_id = 0
         self.reduce_bucket_size = int(reduce_bucket_size)
+
+        if self.all_to_all_reduce:
+            assert self.all_to_all_reduce == True and self.reduce_scatter == True, "when enable all_to_all_reduce, reduce_scatter must be disabled"
 
         if self.reduce_scatter:
             assert self.communication_data_type in (torch.float16, torch.bfloat16), f"ZeRO-3 supports only float16 or bfloat16 communication_data_type with reduce scatter enabled. Got: '{self.communication_data_type}'"
@@ -1156,8 +1166,25 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                 g.div(self.gradient_predivide_factor) for g in full_grads_for_rank
             ]
 
-        grad_partitions_for_rank = reduce_scatter_coalesced(full_grads_for_rank,
-                                                            self.dp_process_group)
+        #torch.cuda.synchronize()
+        #dist.barrier()
+        #all2all_start = time.time()
+        grad_partitions_for_rank = all_to_all_quant_reduce(full_grads_for_rank, 
+                                            self.all2all_process_group)
+        #torch.cuda.synchronize()
+        #dist.barrier()
+        #all2all_end = time.time()
+        #print(f"Guanhua elapsed_time for all-to-all is: {all2all_end - all2all_start}\n")
+        #else:
+        #torch.cuda.synchronize()
+        #dist.barrier()
+        #reduce_scatter_start = time.time()
+        #grad_partitions_for_rank = reduce_scatter_coalesced(full_grads_for_rank, 
+        #                                                        self.dp_process_group)
+        #torch.cuda.synchronize()
+        #dist.barrier()
+        #reduce_scatter_end = time.time()
+        #print(f"Guanhua elapsed_time for reduce-scatter is: {reduce_scatter_end - reduce_scatter_start}\n")
 
         if self.postscale_gradients and self.gradient_predivide_factor != dist.get_world_size(
                 self.dp_process_group):

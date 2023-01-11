@@ -66,7 +66,7 @@ print('seed:', 2222 + rank)
 torch.random.manual_seed(2222 + rank)
 
 config_dict = {
-    "train_batch_size": 8,
+    "train_batch_size": 64,
     "steps_per_print": 1,
     "optimizer": {
         "type": "Adam",
@@ -80,12 +80,12 @@ config_dict = {
     },
     "zero_optimization": {
         "stage": 0,
-        "reduce_bucket_size": 20
+        "reduce_bucket_size": 50000000
     }
 }
 #        "initial_scale_power": 15
 args = get_args('/tmp/', config_dict)
-hidden_dim = 4
+hidden_dim = 40960
 
 model = SimpleModel(hidden_dim, empty_grad=False)
 
@@ -106,6 +106,7 @@ data_loader = get_data_loader(model=model,
                               hidden_dim=hidden_dim,
                               device=model.device)
 #print_params('pre-train', model)
+#while True:
 for n, batch in enumerate(data_loader):
     loss = model(batch[0], batch[1])
     if dist.get_rank() == 0:
@@ -113,4 +114,4 @@ for n, batch in enumerate(data_loader):
     model.backward(loss)
     model.step()
     #print_params('step={}'.format(n), model)
-    if n == 5: break
+    #if n == 5: break
