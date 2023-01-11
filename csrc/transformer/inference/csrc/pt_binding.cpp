@@ -1696,6 +1696,112 @@ at::Tensor moe_res_matmul(at::Tensor& moe_res, at::Tensor& coef, at::Tensor& out
     return output;
 }
 
+at::Tensor ds_dequant_int4(at::Tensor& input_vals, at::Tensor& scales, int groups)
+{
+    auto output_options = at::TensorOptions()
+                              .dtype(at::kHalf)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+    auto total_elems = 2 * at::numel(input_vals);
+    auto elems_per_group = total_elems / groups;
+
+    //auto output = torch::empty({total_elems}, output_options);
+    std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
+    sz[sz.size() - 1] = sz.back() * 2;
+    auto output = torch::empty(sz, output_options);
+
+
+    launch_dequant_int4((__half*)output.data_ptr(),
+                   (int8_t*)input_vals.data_ptr(),
+                   (float*)scales.data_ptr(),
+                   elems_per_group,
+                   total_elems,
+                   at::cuda::getCurrentCUDAStream());
+    return output;
+}
+
+std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at::Tensor& input_scales, int in_groups, int out_groups)
+{
+    auto scales_options = at::TensorOptions()
+                              .dtype(at::kFloat)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+    auto scales = torch::empty({out_groups}, scales_options);
+
+    auto output_options = at::TensorOptions()
+                              .dtype(at::kChar)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+
+    std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
+    const int gpu_per_node = 16;
+    sz[sz.size() - 1] = sz.back()/gpu_per_node; //num of GPU per nodes
+    const int elems_per_in_tensor = at::numel(input_vals) / gpu_per_node;
+    auto output = torch::empty(sz, output_options);
+
+    const int elems_per_in_group = elems_per_in_tensor / (in_groups / gpu_per_node);
+    const int elems_per_out_group = elems_per_in_tensor / out_groups;
+
+    launch_dequant_reduce((int8_t*)output.data_ptr(),
+                          (float*)scales.data_ptr(),
+                          (const int8_t*)input_vals.data_ptr(),
+                          (const float*)input_scales.data_ptr(),
+                          gpu_per_node,
+                          4,
+                          out_groups,
+                          elems_per_out_group,
+                          elems_per_in_tensor,
+                          in_groups / gpu_per_node,
+                          elems_per_in_group,
+                          at::cuda::getCurrentCUDAStream());
+    return {output, scales};
+}
+
+std::vector<at::Tensor> ds_swizzle_quant(at::Tensor& input_vals,
+                                         int num_bits,
+                                         int groups,
+                                         int pipeline_size,
+                                         int nodes,
+                                         int devices_per_node)
+{
+
+    auto scales_options = at::TensorOptions()
+                              .dtype(at::kFloat)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+    auto scales = torch::empty({groups}, scales_options);
+
+    auto output_options = at::TensorOptions()
+                              .dtype(at::kChar)
+                              .layout(at::kStrided)
+                              .device(at::kCUDA)
+                              .requires_grad(false);
+
+    const int quantization_scalar = 8 / num_bits;
+    const int compressed_vals = at::numel(input_vals) / quantization_scalar;
+
+    auto output = torch::empty({compressed_vals}, output_options);
+    const int elems_per_group = at::numel(input_vals) / groups;
+
+    launch_swizzled_quant((int8_t*)output.data_ptr(),
+                          (float*)scales.data_ptr(),
+                          (__half*)input_vals.data_ptr(),
+                          num_bits,
+                          groups,
+                          elems_per_group,
+                          pipeline_size,
+                          nodes,
+                          devices_per_node,
+                          at::cuda::getCurrentCUDAStream());
+
+    return {output, scales};
+}
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
     m.def("softmax_fp32", &ds_softmax<float>, "DeepSpeed SoftMax with fp32 (CUDA)");
@@ -1774,4 +1880,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("allocate_workspace_fp16",
           &allocate_workspace<__half>,
           "DeepSpeed memory allocation for GPT inference with fp16 (CUDA)");
+    m.def("ds_dequant_int4", &ds_dequant_int4);
+    m.def("ds_dequant_reduce_quant_int4", &ds_dequant_reduce_quant_int4);
+    m.def("ds_swizzle_quant", &ds_swizzle_quant);
 }

@@ -59,6 +59,8 @@ class InferenceBuilder(CUDAOpBuilder):
             'csrc/transformer/inference/csrc/dequantize.cu',
             'csrc/transformer/inference/csrc/apply_rotary_pos_emb.cu',
             'csrc/transformer/inference/csrc/transform.cu',
+            'csrc/transformer/inference/csrc/dequantize_n.cu',
+            'csrc/transformer/inference/csrc/swizzled_quantize.cu',
         ]
 
     def extra_ldflags(self):
