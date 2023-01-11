@@ -1737,7 +1737,7 @@ std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at:
                               .requires_grad(false);
 
     std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
-    const int gpu_per_node = 16 // depend on machine in_groups/out_groups;
+    const int gpu_per_node = 16; // depend on machine in_groups/out_groups;
     sz[sz.size() - 1] = sz.back()/gpu_per_node; //num of GPU per nodes
     const int elems_per_in_tensor = at::numel(input_vals) / gpu_per_node;
     auto output = torch::empty(sz, output_options);
