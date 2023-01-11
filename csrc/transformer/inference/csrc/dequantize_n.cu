@@ -207,11 +207,12 @@ void launch_dequant_reduce_impl(int8_t* reduced_data,
         LAUNCH_DEQUANT_REDUCE(8);
     } else if (unroll == 10) {
         LAUNCH_DEQUANT_REDUCE(10);
-    } /*else if (unroll == 12) {
+    } else if (unroll == 12) {
         LAUNCH_DEQUANT_REDUCE(12);
     } else if (unroll == 14) {
+        // 50k maximum
         LAUNCH_DEQUANT_REDUCE(14);
-    } else if (unroll == 16) {
+    } /*else if (unroll == 16) {
         LAUNCH_DEQUANT_REDUCE(16);
     } else if (unroll == 18) {
         LAUNCH_DEQUANT_REDUCE(18);
