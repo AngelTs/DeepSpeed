@@ -716,12 +716,12 @@ at::Tensor ds_layer_norm_residual(at::Tensor& input,
 }
 
 /* Currently only used in unit testing */
-std::vector<at::Tensor> ds_layer_norm_residual_store(at::Tensor& input,
-                                                     at::Tensor& bias,
-                                                     at::Tensor& residual,
-                                                     at::Tensor& gamma,
-                                                     at::Tensor& beta,
-                                                     float epsilon)
+std::vector<at::Tensor> ds_layer_norm_residual_store_pre_ln_res(at::Tensor& input,
+                                                                at::Tensor& bias,
+                                                                at::Tensor& residual,
+                                                                at::Tensor& gamma,
+                                                                at::Tensor& beta,
+                                                                float epsilon)
 {
     const int rows = input.size(0) * input.size(1);
     const int elems_per_row = input.size(2);
@@ -729,29 +729,29 @@ std::vector<at::Tensor> ds_layer_norm_residual_store(at::Tensor& input,
     auto res_output = at::empty_like(input);
 
     if (input.options().dtype() == torch::kFloat16) {
-        launch_fused_residual_ln_store((__half*)norm_output.data_ptr(),
-                                       (__half*)res_output.data_ptr(),
-                                       (const __half*)input.data_ptr(),
-                                       (const __half*)residual.data_ptr(),
-                                       (const __half*)bias.data_ptr(),
-                                       (const __half*)gamma.data_ptr(),
-                                       (const __half*)beta.data_ptr(),
-                                       epsilon,
-                                       rows,
-                                       elems_per_row,
-                                       Context::Instance().GetCurrentStream());
+        launch_fused_residual_ln_store_pre_ln_res((__half*)norm_output.data_ptr(),
+                                                  (__half*)res_output.data_ptr(),
+                                                  (const __half*)input.data_ptr(),
+                                                  (const __half*)residual.data_ptr(),
+                                                  (const __half*)bias.data_ptr(),
+                                                  (const __half*)gamma.data_ptr(),
+                                                  (const __half*)beta.data_ptr(),
+                                                  epsilon,
+                                                  rows,
+                                                  elems_per_row,
+                                                  Context::Instance().GetCurrentStream());
     } else {
-        launch_fused_residual_ln_store((float*)norm_output.data_ptr(),
-                                       (float*)res_output.data_ptr(),
-                                       (const float*)input.data_ptr(),
-                                       (const float*)residual.data_ptr(),
-                                       (const float*)bias.data_ptr(),
-                                       (const float*)gamma.data_ptr(),
-                                       (const float*)beta.data_ptr(),
-                                       epsilon,
-                                       rows,
-                                       elems_per_row,
-                                       Context::Instance().GetCurrentStream());
+        launch_fused_residual_ln_store_pre_ln_res((float*)norm_output.data_ptr(),
+                                                  (float*)res_output.data_ptr(),
+                                                  (const float*)input.data_ptr(),
+                                                  (const float*)residual.data_ptr(),
+                                                  (const float*)bias.data_ptr(),
+                                                  (const float*)gamma.data_ptr(),
+                                                  (const float*)beta.data_ptr(),
+                                                  epsilon,
+                                                  rows,
+                                                  elems_per_row,
+                                                  Context::Instance().GetCurrentStream());
     }
 
     return {norm_output, res_output};
@@ -1695,26 +1695,6 @@ at::Tensor moe_res_matmul(at::Tensor& moe_res, at::Tensor& coef, at::Tensor& out
     }
     return output;
 }
-//@sage: Qgrad kernels
-at::Tensor ds_dequant(at::Tensor& input_vals, at::Tensor& scales, int groups)
-{
-    auto output_options = at::TensorOptions()
-                              .dtype(at::kHalf)
-                              .layout(at::kStrided)
-                              .device(at::kCUDA)
-                              .requires_grad(false);
-    auto total_elems = at::numel(input_vals);
-    auto output = torch::empty(input_vals.sizes(), output_options);
-    auto elems_per_group = total_elems / groups;
-
-    launch_dequant((__half*)output.data_ptr(),
-                   (int8_t*)input_vals.data_ptr(),
-                   (float*)scales.data_ptr(),
-                   elems_per_group,
-                   total_elems,
-                   at::cuda::getCurrentCUDAStream());
-    return output;
-}
 
 at::Tensor ds_dequant_int4(at::Tensor& input_vals, at::Tensor& scales, int groups)
 {
@@ -1757,7 +1737,7 @@ std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at:
                               .requires_grad(false);
 
     std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
-    const int gpu_per_node = 16;
+    const int gpu_per_node = 16; // depend on machine in_groups/out_groups;
     sz[sz.size() - 1] = sz.back()/gpu_per_node; //num of GPU per nodes
     const int elems_per_in_tensor = at::numel(input_vals) / gpu_per_node;
     auto output = torch::empty(sz, output_options);
@@ -1850,9 +1830,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("layer_norm", &ds_layer_norm, "DeepSpeed layer norm (CUDA)");
     m.def(
         "_layer_norm_residual", &ds_layer_norm_residual, "DeepSpeed layer norm + residual (CUDA)");
-    m.def("layer_norm_residual_store",
-          &ds_layer_norm_residual_store,
-          "DeepSpeed layer norm + store residual (CUDA)");
+    m.def("layer_norm_residual_store_pre_ln_res",
+          &ds_layer_norm_residual_store_pre_ln_res,
+          "DeepSpeed layer norm + store pre Layernorm residual (CUDA)");
     m.def("qkv_gemm_fp32", &ds_qkv_gemm<float>, "DeepSpeed qkv gemm with fp32 (CUDA)");
     m.def("qkv_gemm_fp16", &ds_qkv_gemm<__half>, "DeepSpeed qkv gemm with fp16 (CUDA)");
     m.def("qkv_gemm_int8", &ds_qkv_gemm_int8<__half>, "DeepSpeed qkv gemm with int8 (CUDA)");
@@ -1900,7 +1880,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("allocate_workspace_fp16",
           &allocate_workspace<__half>,
           "DeepSpeed memory allocation for GPT inference with fp16 (CUDA)");
-    m.def("ds_dequant", &ds_dequant);
     m.def("ds_dequant_int4", &ds_dequant_int4);
     m.def("ds_dequant_reduce_quant_int4", &ds_dequant_reduce_quant_int4);
     m.def("ds_swizzle_quant", &ds_swizzle_quant);

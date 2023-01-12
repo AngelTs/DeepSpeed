@@ -106,6 +106,7 @@ class TransformerPolicy(DSPolicy):
             # whether or not the qkv is stored in the split-format
             split_qkv=True):
         super().__init__()
+        self.cuda_graph_supported = False
         self.inference = inference
         self.linear_layer = linear_layer
         self.scale_attention = scale_attention
@@ -406,6 +407,7 @@ class MegatronLayerPolicy(TransformerPolicy):
     version = 0
     moe_type = 'standard'
     megatron_v2 = True
+    use_mup = False
 
     def __init__(self, client_module, inference=True):
         super().__init__(inference, megatron_v2=MegatronLayerPolicy.megatron_v2)
@@ -663,6 +665,7 @@ class HFOPTLayerPolicy(TransformerPolicy):
                          mlp_act_func_type=ActivationFuncType.ReLU,
                          pre_attn_norm=True)
         self.client_module = client_module
+
         try:
             import transformers
             HFOPTLayerPolicy._orig_layer_class = transformers.models.opt.modeling_opt.OPTDecoderLayer
@@ -731,7 +734,7 @@ class HFOPTLayerPolicy(TransformerPolicy):
                self.split_qkv
 
 
-class HFDistilBertLayerPolicy(DSPolicy):
+class HFDistilBertLayerPolicy(TransformerPolicy):
     _orig_layer_class = None
 
     def __init__(self, client_module, inference=False, preln=False):
@@ -787,6 +790,7 @@ class HFDistilBertLayerPolicy(DSPolicy):
                transformer_layernorm.bias
 
 
+# transformer-based policies
 replace_policies = [
     HFBertLayerPolicy,
     HFGPTNEOLayerPolicy,
@@ -797,7 +801,7 @@ replace_policies = [
     BLOOMLayerPolicy,
     HFOPTLayerPolicy,
     HFCLIPLayerPolicy,
-    HFDistilBertLayerPolicy,
+    HFDistilBertLayerPolicy
 ]
 
 # non-transformer-based policies
