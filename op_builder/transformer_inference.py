@@ -62,8 +62,6 @@ class InferenceBuilder(CUDAOpBuilder):
             'csrc/transformer/inference/csrc/quantize.cu',
             'csrc/transformer/inference/csrc/transform.cu',
             'csrc/transformer/inference/csrc/apply_rotary_pos_emb.cu',
-            'csrc/transformer/inference/csrc/transform.cu',
-            'csrc/transformer/inference/csrc/dequantize_n.cu',
             'csrc/transformer/inference/csrc/swizzled_quantize.cu',
         ]
 
