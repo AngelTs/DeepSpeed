@@ -97,6 +97,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                  dp_process_group=None,
                  all2all_process_group=None,
                  reduce_scatter=True,
+                 all_to_all_reduce=True,
                  overlap_comm=False,
                  offload_optimizer_config=None,
                  offload_param_config=None,
@@ -207,6 +208,10 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         #-------------Stage 3 Setup-------------------#
 
         self.timers = timers
+
+        self.all_to_all_reduce = all_to_all_reduce
+
+        self.all2all_process_group = all2all_process_group
 
         self.reduce_scatter = reduce_scatter
 

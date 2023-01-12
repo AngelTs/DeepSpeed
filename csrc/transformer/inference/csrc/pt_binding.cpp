@@ -1695,26 +1695,6 @@ at::Tensor moe_res_matmul(at::Tensor& moe_res, at::Tensor& coef, at::Tensor& out
     }
     return output;
 }
-//@sage: Qgrad kernels
-at::Tensor ds_dequant(at::Tensor& input_vals, at::Tensor& scales, int groups)
-{
-    auto output_options = at::TensorOptions()
-                              .dtype(at::kHalf)
-                              .layout(at::kStrided)
-                              .device(at::kCUDA)
-                              .requires_grad(false);
-    auto total_elems = at::numel(input_vals);
-    auto output = torch::empty(input_vals.sizes(), output_options);
-    auto elems_per_group = total_elems / groups;
-
-    launch_dequant((__half*)output.data_ptr(),
-                   (int8_t*)input_vals.data_ptr(),
-                   (float*)scales.data_ptr(),
-                   elems_per_group,
-                   total_elems,
-                   at::cuda::getCurrentCUDAStream());
-    return output;
-}
 
 at::Tensor ds_dequant_int4(at::Tensor& input_vals, at::Tensor& scales, int groups)
 {
@@ -1757,7 +1737,7 @@ std::vector<at::Tensor> ds_dequant_reduce_quant_int4(at::Tensor& input_vals, at:
                               .requires_grad(false);
 
     std::vector<long int> sz(input_vals.sizes().begin(), input_vals.sizes().end());
-    const int gpu_per_node = 16;
+    const int gpu_per_node = 16; // depend on machine in_groups/out_groups;
     sz[sz.size() - 1] = sz.back()/gpu_per_node; //num of GPU per nodes
     const int elems_per_in_tensor = at::numel(input_vals) / gpu_per_node;
     auto output = torch::empty(sz, output_options);
@@ -1900,7 +1880,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("allocate_workspace_fp16",
           &allocate_workspace<__half>,
           "DeepSpeed memory allocation for GPT inference with fp16 (CUDA)");
-    m.def("ds_dequant", &ds_dequant);
     m.def("ds_dequant_int4", &ds_dequant_int4);
     m.def("ds_dequant_reduce_quant_int4", &ds_dequant_reduce_quant_int4);
     m.def("ds_swizzle_quant", &ds_swizzle_quant);

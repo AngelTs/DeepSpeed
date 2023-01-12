@@ -214,6 +214,7 @@ class DeepSpeedEngine(Module):
         self.training_data = training_data
         self.collate_fn = collate_fn
         self.mpu = mpu
+        self.all_to_all_group = None
         self.data_parallel_group = None
         self.global_steps = 0
         self.global_samples = 0
