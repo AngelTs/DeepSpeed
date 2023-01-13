@@ -17,7 +17,6 @@ from deepspeed.runtime.zero.partitioned_param_profiler import PartitionedParamet
 from deepspeed.runtime.swap_tensor.partitioned_param_swapper import PartitionedParamStatus
 from deepspeed.utils.debug import debug_module2name_id, debug_param2name_id
 
-
 def debug_rank0(message: str) -> None:
     if dist.get_rank() == 0:
         logger.debug(message)

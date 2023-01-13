@@ -235,7 +235,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         self.reduce_bucket_size = int(reduce_bucket_size)
 
         if self.all2all_process_group is not None:
-            assert self.all2all_process_group is not None and self.reduce_scatter == False, "when enable all_to_all_reduce, reduce_scatter must be disabled"
+            assert self.all2all_process_group is not None and self.reduce_scatter == True, "when enable all_to_all_reduce, reduce_scatter must be disabled"
 
         if self.reduce_scatter:
             assert self.communication_data_type in (torch.float16, torch.bfloat16), f"ZeRO-3 supports only float16 or bfloat16 communication_data_type with reduce scatter enabled. Got: '{self.communication_data_type}'"

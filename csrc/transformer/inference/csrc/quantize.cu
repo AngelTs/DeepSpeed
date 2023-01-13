@@ -646,15 +646,16 @@ void launch_act_quant_impl(int8_t* output_data,
     } else if (external_unroll == 11) {
         LAUNCH_ACTIVATION_QUANT(11, q_bits);
     } else if (external_unroll == 12) {
+        // 48k limit
         LAUNCH_ACTIVATION_QUANT(12, q_bits);
-    } else if (external_unroll == 13) {
+    } /*else if (external_unroll == 13) {
         LAUNCH_ACTIVATION_QUANT(13, q_bits);
     } else if (external_unroll == 14) {
         LAUNCH_ACTIVATION_QUANT(14, q_bits);
     } else if (external_unroll == 15) {
         // - 57344 elems
         LAUNCH_ACTIVATION_QUANT(15, q_bits);
-    }
+    }*/
     
 }
 
