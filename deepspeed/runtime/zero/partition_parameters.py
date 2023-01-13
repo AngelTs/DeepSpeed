@@ -791,6 +791,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
         self.quantized_weights = zero_quantized_weights
 
         if (self.quantized_weights):
+            self.module=module
             self.quantizer_module = CUDAQuantizer()
             print_rank_0(f'Using quantizer: {self.quantizer_module.__class__.__name__}',
                          force=True)
@@ -940,6 +941,8 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             self._ensure_availability_of_partitioned_params(params)
 
             quant = self.quantized_weights
+            if self.module.training is False:
+                quant = False
 
             for param in params:
                 if param.ds_status != ZeroParamStatus.NOT_AVAILABLE:
