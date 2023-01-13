@@ -790,8 +790,8 @@ class Init(InsertPostInitMethodToModuleSubClasses):
 
         self.quantized_weights = zero_quantized_weights
 
+        self.module=module
         if (self.quantized_weights):
-            self.module=module
             self.quantizer_module = CUDAQuantizer()
             print_rank_0(f'Using quantizer: {self.quantizer_module.__class__.__name__}',
                          force=True)
