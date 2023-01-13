@@ -941,7 +941,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             self._ensure_availability_of_partitioned_params(params)
 
             quant = self.quantized_weights
-            if self.module.training is False:
+            if self.module is not None and self.module.training is False:
                 quant = False
 
             for param in params:
