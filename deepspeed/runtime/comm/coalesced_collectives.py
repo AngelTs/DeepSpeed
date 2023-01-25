@@ -34,7 +34,7 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
     local_world_size = torch.cuda.device_count()
     global_world_size = dist.get_world_size()
     num_nodes = global_world_size // local_world_size
-    #inter_quant_group = 256
+    #inter_quant_group = 32
     this_rank = dist.get_rank()
     #print(f"num_nodes is {num_nodes}, local_world_size is {local_world_size}, global_world_size is {global_world_size}, this_rank is {this_rank}\n")
     intra_idx = int(this_rank/local_world_size)
@@ -43,11 +43,11 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
     #print(f"this_rank is {this_rank}, global group index {inter_idx}\n")
     output_lst: List[Tensor] = [None] * len(tensors)
     for idx, tensor in enumerate(tensors):
-        assert tensor.numel()>=256, 'Tensor too small, must be bigger than 256'
+        assert tensor.numel()>=32, 'Tensor too small, must be bigger than 32'
         if tensor.dim()==1:
-            intra_quant_group = 256
+            intra_quant_group = 32
         else:
-            intra_quant_group = max(tensor.shape[0], tensor.shape[1], 256)
+            intra_quant_group = max(tensor.shape[0], tensor.shape[1], 32)
         
         inter_quant_group = intra_quant_group // local_world_size 
         intra_quant_int4, intra_q_scales = quantizer_cuda_module.ds_swizzle_quant(tensor, 4, intra_quant_group, 1, num_nodes, local_world_size)
