@@ -1061,7 +1061,6 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                                      param.ds_numel).view(
                                                          param.ds_shape).to(param.device)
                     return AllGatherHandle(handles, param)
-                else:
 
             else:
                 partition_sz = sum(p.ds_tensor.ds_numel for p in params)
