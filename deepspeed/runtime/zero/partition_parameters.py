@@ -995,6 +995,47 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 if not forward and param.ds_secondary_tensor is not None:
                     buffer_size = param.ds_secondary_tensor.shape[
                         0] * world_size  #make sure out is appropriately sized
+                if quant:
+                    param_buffer = torch.empty(
+                        #math.ceil(param.ds_numel / self.world_size) * self.world_size,
+                        buffer_size,
+                        dtype=torch.int8,
+                        device=torch.cuda.current_device(),
+                        requires_grad=False,
+                    )
+                    # print(f"Quantize a tensor of shape {param.ds_tensor.shape}")
+                    param_ds_tensor = param.ds_secondary_tensor if not forward and param.ds_secondary_tensor is not None else param.ds_tensor
+                    try:
+                        quantized_param,scales=self.quantizer_module.quantize(param_ds_tensor)
+                    except AssertionError as e:
+                        quant = False
+                    if quant:
+                        handle = _dist_allgather_fn(quantized_param,
+                                                    param_buffer,
+                                                    ds_process_group)
+                        ###TODO: fix buffer size
+                        quant_scale_buffer = torch.empty(
+                            scales.numel() * world_size,
+                            dtype=torch.float32,
+                            device=torch.cuda.current_device(),
+                            requires_grad=False,
+                        )
+                        quant_handle = _dist_allgather_fn(scales,
+                                                        quant_scale_buffer,
+                                                        ds_process_group)
+                        quant_info = QuantizationInfo()
+                        # param.data = param_buffer.narrow(0,
+                        #                                 0,
+                        #                                 param.ds_numel).view(param.ds_shape).to(
+                        #                                     param.device)
+                        quant_info.quantized_param = param_buffer.narrow(
+                            0,
+                            0,
+                            param.ds_numel).view(param.ds_shape).to(param.device)
+                        quant_info.backend = self.quantizer_module
+                        quant_info.quant_handle = quant_handle
+                        quant_info.scale_buffer = quant_scale_buffer
+                        return AllGatherHandle(handle, param, quantization=quant_info)
                 if not quant:
                     param_buffer = torch.empty(
                         #math.ceil(param.ds_numel / world_size) * world_size,
@@ -1021,45 +1062,6 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                                          param.ds_shape).to(param.device)
                     return AllGatherHandle(handles, param)
                 else:
-                    param_buffer = torch.empty(
-                        #math.ceil(param.ds_numel / self.world_size) * self.world_size,
-                        buffer_size,
-                        dtype=torch.int8,
-                        device=torch.cuda.current_device(),
-                        requires_grad=False,
-                    )
-                    # print(f"Quantize a tensor of shape {param.ds_tensor.shape}")
-                    param_ds_tensor = param.ds_secondary_tensor if not forward and param.ds_secondary_tensor is not None else param.ds_tensor
-                    quantized_param,scales=self.quantizer_module.quantize(param_ds_tensor)
-                    handle = _dist_allgather_fn(quantized_param,
-                                                param_buffer,
-                                                ds_process_group)
-                    ###TODO: fix buffer size
-                    quant_scale_buffer = torch.empty(
-                        scales.numel() * world_size,
-                        dtype=torch.float32,
-                        device=torch.cuda.current_device(),
-                        requires_grad=False,
-                    )
-                    quant_handle = _dist_allgather_fn(scales,
-                                                      quant_scale_buffer,
-                                                      ds_process_group)
-                    quant_info = QuantizationInfo()
-                    # param.data = param_buffer.narrow(0,
-                    #                                 0,
-                    #                                 param.ds_numel).view(param.ds_shape).to(
-                    #                                     param.device)
-                    ##FIX
-                    ##change ds_num
-                    #secondary_tensor.shape[0]*world_size??
-                    quant_info.quantized_param = param_buffer.narrow(
-                        0,
-                        0,
-                        param.ds_numel).view(param.ds_shape).to(param.device)
-                    quant_info.backend = self.quantizer_module
-                    quant_info.quant_handle = quant_handle
-                    quant_info.scale_buffer = quant_scale_buffer
-                    return AllGatherHandle(handle, param, quantization=quant_info)
 
             else:
                 partition_sz = sum(p.ds_tensor.ds_numel for p in params)
@@ -1068,6 +1070,57 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     partition_sz = sum(p.ds_tensor.ds_numel *
                                        p.ds_secondary_tensor_num_of_groups
                                        for p in params)
+
+                if quant:
+                    flat_tensor = torch.empty(partition_sz * world_size,
+                                              dtype=torch.int8,
+                                              device=torch.cuda.current_device(),
+                                              requires_grad=False)
+                    # partitions: List[Parameter] = []
+                    # for i in range(self.world_size):
+                    #     partitions.append(
+                    #         flat_tensor.narrow(0,
+                    #                         partition_sz * i,
+                    #                         partition_sz))
+                    try:
+                        if self.zero_param_process_group and not forward:
+                            quantized_param, scales=self.quantizer_module.quantize(instrument_w_nvtx(torch.cat)(
+                                [p.ds_secondary_tensor.to(torch.cuda.current_device()) for p in params]))
+                        else:
+                            quantized_param, scales=self.quantizer_module.quantize(instrument_w_nvtx(torch.cat)(
+                                [p.ds_tensor.to(torch.cuda.current_device()) for p in params]))
+                    except AssertionError as e:
+                        quant = False
+                    if quant:
+                        # print(f"Quantized a tensor of shape {quantized_param.shape}")
+                        handle = _dist_allgather_fn(quantized_param,
+                                                    flat_tensor,
+                                                    ds_process_group)
+                        quant_info = QuantizationInfo()
+                        quant_scale_buffer = torch.empty(
+                            scales.numel() * world_size,
+                            dtype=torch.float32,
+                            device=torch.cuda.current_device(),
+                            requires_grad=False,
+                        )
+                        quant_handle = _dist_allgather_fn(scales,
+                                                        quant_scale_buffer,
+                                                        ds_process_group)
+                        quant_info.quantized_param = flat_tensor
+                        quant_info.backend = self.quantizer_module
+                        quant_info.quant_handle = quant_handle
+                        quant_info.scale_buffer = quant_scale_buffer
+                        quant_info.partition_sz = partition_sz
+                        quant_info.world_size = world_size
+                        return AllGatherCoalescedHandle(
+                            allgather_handle=handle,
+                            params=params,
+                            partitions=None,
+                            world_size=world_size,
+                            use_secondary_tensor=use_secondary_tensor,
+                            forward=forward,
+                            quantization=quant_info,
+                        )
 
                 if not quant:
                     flat_tensor = torch.empty(partition_sz * world_size,
@@ -1115,52 +1168,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                         use_secondary_tensor=use_secondary_tensor,
                         forward=forward,
                     )
-                else:
-                    flat_tensor = torch.empty(partition_sz * world_size,
-                                              dtype=torch.int8,
-                                              device=torch.cuda.current_device(),
-                                              requires_grad=False)
-                    # partitions: List[Parameter] = []
-                    # for i in range(self.world_size):
-                    #     partitions.append(
-                    #         flat_tensor.narrow(0,
-                    #                         partition_sz * i,
-                    #                         partition_sz))
-                    if self.zero_param_process_group and not forward:
-                        quantized_param, scales=self.quantizer_module.quantize(instrument_w_nvtx(torch.cat)(
-                            [p.ds_secondary_tensor.to(torch.cuda.current_device()) for p in params]))
-                    else:
-                        quantized_param, scales=self.quantizer_module.quantize(instrument_w_nvtx(torch.cat)(
-                            [p.ds_tensor.to(torch.cuda.current_device()) for p in params]))
-                    # print(f"Quantized a tensor of shape {quantized_param.shape}")
-                    handle = _dist_allgather_fn(quantized_param,
-                                                flat_tensor,
-                                                ds_process_group)
-                    quant_info = QuantizationInfo()
-                    quant_scale_buffer = torch.empty(
-                        scales.numel() * world_size,
-                        dtype=torch.float32,
-                        device=torch.cuda.current_device(),
-                        requires_grad=False,
-                    )
-                    quant_handle = _dist_allgather_fn(scales,
-                                                      quant_scale_buffer,
-                                                      ds_process_group)
-                    quant_info.quantized_param = flat_tensor
-                    quant_info.backend = self.quantizer_module
-                    quant_info.quant_handle = quant_handle
-                    quant_info.scale_buffer = quant_scale_buffer
-                    quant_info.partition_sz = partition_sz
-                    quant_info.world_size = world_size
-                    return AllGatherCoalescedHandle(
-                        allgather_handle=handle,
-                        params=params,
-                        partitions=None,
-                        world_size=world_size,
-                        use_secondary_tensor=use_secondary_tensor,
-                        forward=forward,
-                        quantization=quant_info,
-                    )
+
 
         def partition(param_list=None,
                       backward=False,
