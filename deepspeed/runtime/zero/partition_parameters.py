@@ -1545,15 +1545,21 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             secondary_start = secondary_partition_size * self.rank_in_group
 
             secondary_end = secondary_start + secondary_partition_size
-
+           
             one_dim_param = param.contiguous().view(-1)
-
-            if secondary_start < param.ds_numel and secondary_end <= param.ds_numel:
-                sec_src_tensor = one_dim_param.narrow(0,
+            #APC
+            start = partition_size * self.rank
+            end = start + partition_size
+            #if secondary_start < param.ds_numel and secondary_end <= param.ds_numel:
+            #if self.rank_in_group == 0:
+            #    print('Rank [', self.rank, ']', one_dim_param.size(),' ', start, ' ', end, ' ', secondary_start,' ', secondary_end,' ',  partition_size,' ', secondary_partition_size)
+            if start < param.ds_numel and end <= param.ds_numel:
+                if secondary_start < param.ds_numel and secondary_end <= param.ds_numel:
+                    sec_src_tensor = one_dim_param.narrow(0,
                                                       secondary_start,
                                                       secondary_partition_size)
-                param.ds_secondary_tensor.copy_(sec_src_tensor)
-                self.use_secondary_tensor = True
+                    param.ds_secondary_tensor.copy_(sec_src_tensor)
+                    self.use_secondary_tensor = True
                 ##TODO:SAGE  assert that secondary tensor is of right size
                 #assert(param.ds_secondary_tensor_size == param.ds_numel/group size)
                 #assert(param.ds_secondary_tensor_size == ds_tensor*num_param_groups)
@@ -1564,7 +1570,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 #                                  dtype=param.dtype,
                 #                                  device=self.remote_device )
 
-                start = partition_size * self.rank
+                #start = partition_size * self.rank
                 if start < param.ds_numel:
                     elements_to_copy = param.ds_numel - start
                     elements_to_copy_sec = elements_to_copy * param.ds_secondary_tensor_num_of_groups
