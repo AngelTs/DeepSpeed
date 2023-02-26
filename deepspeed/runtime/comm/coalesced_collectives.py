@@ -43,14 +43,19 @@ def all_to_all_quant_reduce(tensors: List[Tensor], groups:{}) -> List[Tensor]:
     #print(f"this_rank is {this_rank}, global group index {inter_idx}\n")
     output_lst: List[Tensor] = [None] * len(tensors)
     for idx, tensor in enumerate(tensors):
-        assert tensor.numel() >= global_world_size*2, 'Tensor too small, must be bigger than total_num_gpus * 2'
+        #assert tensor.numel() >= global_world_size*2, '===QG: Tensor too small, must be bigger than total_num_gpus * 2'
         if tensor.dim()==1:
-            intra_quant_group = global_world_size*2
+            intra_quant_group = global_world_size
+            #assert tensor.numel()%intra_quant_group == 0, '===QG: Tensor cannot be evenly divided.'
         else:
-            intra_quant_group = max(tensor.shape[0], tensor.shape[1], global_world_size*2)
+            intra_quant_group = max(tensor.shape[0], tensor.shape[1], global_world_size)
         
-        inter_quant_group = intra_quant_group // local_world_size 
+        inter_quant_group = intra_quant_group // local_world_size
+        #if this_rank==0:
+            #print(f"intra group is {intra_quant_group}, inter group is {inter_quant_group}, tensor shape is {tensor.shape}")
+        #torch.cuda.synchronize()
         intra_quant_int4, intra_q_scales = quantizer_cuda_module.ds_swizzle_quant(tensor, 4, intra_quant_group, 1, num_nodes, local_world_size)
+        #torch.cuda.synchronize()
         #print(f"intra_quiat_int4 shape is {intra_quant_int4.shape}, element size is {intra_quant_int4.element_size()}\n")
         local_output = torch.empty_like(intra_quant_int4)
         scale_output = torch.empty_like(intra_q_scales)
