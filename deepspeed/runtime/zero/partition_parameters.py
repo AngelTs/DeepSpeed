@@ -484,7 +484,7 @@ class AllGatherHandle:
             instrument_w_nvtx(self.__quantization.quant_handle.wait)()
             self.__param.data = self.__quantization.backend.dequantize(
                 self.__quantization.quantized_param,
-                self.__quantization.scale_buffer)
+                self.__quantization.scale_buffer).to(self.__param.device)
         self.__param.ds_status = ZeroParamStatus.AVAILABLE
 
 
@@ -524,7 +524,7 @@ class AllGatherCoalescedHandle:
             instrument_w_nvtx(self.__quantization.quant_handle.wait)()
             flat_tensor = self.__quantization.backend.dequantize(
                 self.__quantization.quantized_param,
-                self.__quantization.scale_buffer)
+                self.__quantization.scale_buffer).to(self.__params[0].device)
 
             self.__partitions: List[Parameter] = []
             for i in range(self.__quantization.world_size):
@@ -600,7 +600,7 @@ class CUDAQuantizer:
                 assert param.numel() > groups,f"Adaptive grouping algorithm cannot find a group size for input tensor of size {param.numel()}"
                 self.group_size_cache[param.numel()]=groups
         # print(f"quantize a param of shape {param.shape} with group number {groups}")
-        return self.quantizer_cuda_module.quantize(param,
+        return self.quantizer_cuda_module.quantize(param.cuda(),
                                                    groups,
                                                    8,
                                                    self.quantizer_cuda_module.Symmetric)
@@ -1031,7 +1031,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     # print(f"Quantize a tensor of shape {param.ds_tensor.shape}")
                     param_ds_tensor = param.ds_secondary_tensor if not forward and param.ds_secondary_tensor is not None else param.ds_tensor
                     quantized_param,scales=self.quantizer_module.quantize(param_ds_tensor)
-                    handle = _dist_allgather_fn(quantized_param,
+                    handle = _dist_allgather_fn(quantized_param.to(torch.cuda.current_device()),
                                                 param_buffer,
                                                 ds_process_group)
                     ###TODO: fix buffer size
@@ -1041,7 +1041,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                         device=torch.cuda.current_device(),
                         requires_grad=False,
                     )
-                    quant_handle = _dist_allgather_fn(scales,
+                    quant_handle = _dist_allgather_fn(scales.to(torch.cuda.current_device()),
                                                       quant_scale_buffer,
                                                       ds_process_group)
                     quant_info = QuantizationInfo()
