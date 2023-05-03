@@ -1,6 +1,12 @@
+# Copyright (c) Microsoft Corporation.
+# SPDX-License-Identifier: Apache-2.0
+
+# DeepSpeed Team
+
 import torch
-import deepspeed
 from ..config import DeepSpeedInferenceConfig
+
+from deepspeed.ops.op_builder import InferenceBuilder
 
 
 class BaseOp(torch.nn.Module):
@@ -10,5 +16,5 @@ class BaseOp(torch.nn.Module):
         super(BaseOp, self).__init__()
         self.config = config
         if BaseOp.inference_cuda_module is None:
-            builder = deepspeed.ops.op_builder.InferenceBuilder()
+            builder = InferenceBuilder()
             BaseOp.inference_cuda_module = builder.load()

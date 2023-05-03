@@ -1,10 +1,11 @@
-"""
-Copyright 2022 The Microsoft DeepSpeed Team
-"""
+# Copyright (c) Microsoft Corporation.
+# SPDX-License-Identifier: Apache-2.0
+
+# DeepSpeed Team
+
 import torch
 
-from deepspeed.accelerator import get_accelerator
-from deepspeed.ops.op_builder.builder_names import RandomLTDBuilder
+from deepspeed.ops.op_builder import RandomLTDBuilder
 """
 Returns:
     sampled_indices: [layers, batch_size, reserved_length]
@@ -24,12 +25,10 @@ def gpt_sample_tokens(reserved_length: int,
     prob_dist = torch.ones((layers * batch_size, seq_length), device=device)
     sampled_indices = torch.multinomial(prob_dist, reserved_length)
 
-    sampled_indices = sampled_indices.reshape(layers,
-                                              batch_size,
-                                              reserved_length).to(torch.int32)
+    sampled_indices = sampled_indices.reshape(layers, batch_size, reserved_length).to(torch.int32)
     global random_ltd_module
     if random_ltd_module is None:
-        random_ltd_module = get_accelerator().create_op_builder(RandomLTDBuilder).load()
+        random_ltd_module = RandomLTDBuilder().load()
     sampled_indices = random_ltd_module.token_sort_(sampled_indices, seq_length)
 
     # Not certain the optimized kernel is actually better here, cause it kind of screws
@@ -60,12 +59,10 @@ def bert_sample_tokens(reserved_length: int,
     prob_dist = torch.ones((layers * batch_size, seq_length), device=device)
     sampled_indices = torch.multinomial(prob_dist, reserved_length)
 
-    sampled_indices = sampled_indices.reshape(layers,
-                                              batch_size,
-                                              reserved_length).to(torch.int32)
+    sampled_indices = sampled_indices.reshape(layers, batch_size, reserved_length).to(torch.int32)
     global random_ltd_module
     if random_ltd_module is None:
-        random_ltd_module = get_accelerator().create_op_builder(RandomLTDBuilder).load()
+        random_ltd_module = RandomLTDBuilder().load()
 
     sampled_indices = random_ltd_module.token_sort_(sampled_indices, seq_length)
     dtype = sampled_indices.dtype
@@ -83,15 +80,12 @@ def bert_sample_tokens(reserved_length: int,
 
 
 class GatherTokens(torch.autograd.Function):
+
     @staticmethod
-    def forward(ctx,
-                activations: torch.Tensor,
-                sorted_indices: torch.Tensor,
-                batch_first: bool):
+    def forward(ctx, activations: torch.Tensor, sorted_indices: torch.Tensor, batch_first: bool):
         global random_ltd_module
         if random_ltd_module is None:
-            random_ltd_module = get_accelerator().create_op_builder(
-                RandomLTDBuilder).load()
+            random_ltd_module = RandomLTDBuilder().load()
         ctx.save_for_backward(activations, sorted_indices)
         ctx.batch_first = batch_first
         return activations, random_ltd_module.token_gather(activations, sorted_indices, batch_first)
@@ -102,31 +96,22 @@ class GatherTokens(torch.autograd.Function):
         g_gradients = g_gradients.contiguous()
         global random_ltd_module
         if random_ltd_module is None:
-            random_ltd_module = get_accelerator().create_op_builder(
-                RandomLTDBuilder).load()
+            random_ltd_module = RandomLTDBuilder().load()
         activations, sorted_indices = ctx.saved_tensors
         batch_first = ctx.batch_first
 
-        return random_ltd_module.token_scatter_(a_gradients,
-                                                g_gradients,
-                                                sorted_indices,
-                                                batch_first), None, None
+        return random_ltd_module.token_scatter_(a_gradients, g_gradients, sorted_indices, batch_first), None, None
 
 
 class ScatterTokens(torch.autograd.Function):
+
     @staticmethod
-    def forward(ctx,
-                all_activations: torch.Tensor,
-                layer_activations: torch.Tensor,
-                sorted_indices: torch.Tensor,
+    def forward(ctx, all_activations: torch.Tensor, layer_activations: torch.Tensor, sorted_indices: torch.Tensor,
                 batch_first: bool):
         global random_ltd_module
         if random_ltd_module is None:
-            random_ltd_module = get_accelerator().create_op_builder(
-                RandomLTDBuilder).load()
-        scatter_results = random_ltd_module.token_scatter_(all_activations.clone(),
-                                                           layer_activations,
-                                                           sorted_indices,
+            random_ltd_module = RandomLTDBuilder().load()
+        scatter_results = random_ltd_module.token_scatter_(all_activations.clone(), layer_activations, sorted_indices,
                                                            batch_first)
 
         ctx.save_for_backward(sorted_indices)
@@ -139,12 +124,9 @@ class ScatterTokens(torch.autograd.Function):
         out_gradients = out_gradients.contiguous()
         global random_ltd_module
         if random_ltd_module is None:
-            random_ltd_module = get_accelerator().create_op_builder(
-                RandomLTDBuilder).load()
+            random_ltd_module = RandomLTDBuilder().load()
         sorted_indices, = ctx.saved_tensors
         batch_first = ctx.batch_first
 
-        ret_val = random_ltd_module.token_gather(out_gradients,
-                                                 sorted_indices,
-                                                 batch_first)
+        ret_val = random_ltd_module.token_gather(out_gradients, sorted_indices, batch_first)
         return out_gradients, ret_val, None, None

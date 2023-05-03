@@ -1,7 +1,8 @@
-"""
-Copyright 2020 The Microsoft DeepSpeed Team
-Licensed under the MIT license.
+# Copyright (c) Microsoft Corporation.
+# SPDX-License-Identifier: Apache-2.0
 
+# DeepSpeed Team
+"""
 Functionality of swapping optimizer tensors to/from (NVMe) storage devices.
 """
 
@@ -11,7 +12,7 @@ import time
 from multiprocessing import Pool, Barrier
 from test_ds_aio_utils import report_results, task_log, task_barrier
 from deepspeed.accelerator import get_accelerator
-from deepspeed.ops.op_builder.builder_names import AsyncIOBuilder
+from deepspeed.ops.op_builder import AsyncIOBuilder
 
 
 def pre_basic(args, tid, read_op):
@@ -20,14 +21,8 @@ def pre_basic(args, tid, read_op):
     file = args.read_file if read_op else f'{args.write_file}.{tid}'
 
     task_log(tid, f'Allocate tensor of size {num_bytes} bytes')
-    buffer = get_accelerator().pin_memory(
-        torch.empty(num_bytes,
-                    dtype=torch.uint8,
-                    device='cpu'))
-    task_log(
-        tid,
-        f'{io_string} file {file} of size {num_bytes} bytes from buffer on device {buffer.device}'
-    )
+    buffer = get_accelerator().pin_memory(torch.empty(num_bytes, dtype=torch.uint8, device='cpu'))
+    task_log(tid, f'{io_string} file {file} of size {num_bytes} bytes from buffer on device {buffer.device}')
 
     ctxt = {}
     ctxt['file'] = file
@@ -60,14 +55,8 @@ def post_basic(pool_params):
 def main_basic_read(pool_params):
     args, tid, ctxt = pool_params
     start_time = time.time()
-    get_accelerator().create_op_builder(AsyncIOBuilder).load().aio_read(
-        ctxt['buffer'],
-        ctxt['file'],
-        args.block_size,
-        args.queue_depth,
-        args.single_submit,
-        args.overlap_events,
-        args.validate)
+    AsyncIOBuilder().load().aio_read(ctxt['buffer'], ctxt['file'], args.block_size, args.queue_depth,
+                                     args.single_submit, args.overlap_events, args.validate)
     end_time = time.time()
     ctxt['elapsed_sec'] += end_time - start_time
 
@@ -77,14 +66,8 @@ def main_basic_read(pool_params):
 def main_basic_write(pool_params):
     args, tid, ctxt = pool_params
     start_time = time.time()
-    get_accelerator().create_op_builder(AsyncIOBuilder).load().aio_write(
-        ctxt['buffer'],
-        ctxt['file'],
-        args.block_size,
-        args.queue_depth,
-        args.single_submit,
-        args.overlap_events,
-        args.validate)
+    AsyncIOBuilder().load().aio_write(ctxt['buffer'], ctxt['file'], args.block_size, args.queue_depth,
+                                      args.single_submit, args.overlap_events, args.validate)
     end_time = time.time()
     ctxt['elapsed_sec'] += end_time - start_time
 

@@ -1,180 +1,19 @@
-/*
-Copyright 2022 The Microsoft DeepSpeed Team
-*/
+// Copyright (c) Microsoft Corporation.
+// SPDX-License-Identifier: Apache-2.0
+
+// DeepSpeed Team
 
 #ifndef __HIP_PLATFORM_HCC__
 #include <cuda_profiler_api.h>
 #endif
+#include "conversion_utils.h"
 #include "inference_cuda_layers.h"
 namespace cg = cooperative_groups;
 
-__global__ void transform_scale(float* query,
-                                float* kv_cache,
-                                const float* vals,
-                                int hidden_dim,
-                                int seq_length,
-                                unsigned cur_tokens,
-                                uint64_t value_offset,
-                                int heads,
-                                int head_ext,
-                                float norm_factor,
-                                size_t max_token_length)
-{
-    int d0_stride = hidden_dim * seq_length;
-    int d1_stride = hidden_dim;
-    int d2_stride = hidden_dim / heads;
-
-    int d0_out_stride = d0_stride;
-    int d1_out_stride = d2_stride;
-
-    int d0 = blockIdx.x;                                                  // Batch
-    int d1 = blockIdx.y;                                                  // Sequence ID (0-127)
-    int cnt = blockIdx.z / head_ext;                                      // Hidden count
-    int d2 = threadIdx.y + (blockIdx.z % head_ext) * (heads / head_ext);  // Head (0-11)
-    int d3 = threadIdx.x;                                                 // Values (groups of 4)
-    int d2_out_stride = d2_stride * (cnt == 0 ? seq_length : max_token_length);
-
-    kv_cache += d0 * (hidden_dim * cur_tokens);
-    const float4* vals_vec = reinterpret_cast<const float4*>(vals);
-    float4* output_vec = reinterpret_cast<float4*>(
-        cnt == 0 ? query : (cnt == 1 ? kv_cache : kv_cache + value_offset));
-
-    float4 inputs = vals_vec[d0 * d0_stride * (gridDim.z / head_ext) + cnt * d1_stride +
-                             d1 * d1_stride * (gridDim.z / head_ext) + d2 * d2_stride + d3];
-
-    inputs.x = (cnt < 2) ? inputs.x * norm_factor : inputs.x;
-    inputs.y = (cnt < 2) ? inputs.y * norm_factor : inputs.y;
-    inputs.z = (cnt < 2) ? inputs.z * norm_factor : inputs.z;
-    inputs.w = (cnt < 2) ? inputs.w * norm_factor : inputs.w;
-
-    output_vec[d0 * d0_out_stride + d1 * d1_out_stride + d2 * d2_out_stride + d3] = inputs;
-}
-
-__global__ void transform_scale(__half* query,
-                                __half* kv_cache,
-                                const __half* vals,
-                                unsigned hidden_dim,
-                                int seq_length,
-                                unsigned cur_tokens,
-                                uint64_t value_offset,
-                                int heads,
-                                int head_ext,
-                                float norm_factor,
-                                size_t max_token_length)
-{
-    // int d0_stride = hidden_dim * seq_length;
-    int d1_stride = hidden_dim;
-    int d2_stride = hidden_dim / heads;
-
-    // int d0 = blockIdx.x;                                                  // Batch
-    int d1 = blockIdx.y;                                                  // Sequence ID (0-127)
-    int cnt = blockIdx.z / head_ext;                                      // Hidden count
-    int d2 = threadIdx.y + (blockIdx.z % head_ext) * (heads / head_ext);  // Head (0-11)
-    int d3 = threadIdx.x;                                                 // Values (groups of 4)
-
-    int d2_out_stride = d2_stride * (cnt == 0 ? seq_length : max_token_length);
-
-    float4 vals_arr;
-    float4 bias_arr;
-    float4 output_arr;
-    __half2* vals_half = reinterpret_cast<__half2*>(&vals_arr);
-    //__half2* bias_half = reinterpret_cast<__half2*>(&bias_arr);
-    __half2* output_half = reinterpret_cast<__half2*>(&output_arr);
-
-    const float4* vals_vec = reinterpret_cast<const float4*>(vals);
-    // const float4* bias_vec = reinterpret_cast<const float4*>(bias);
-    float4* output_vec = reinterpret_cast<float4*>(
-        cnt == 0 ? query : (cnt == 1 ? kv_cache : kv_cache + value_offset));
-
-    // vals_vec += (d0 * d0_stride * (gridDim.z / head_ext));
-    vals_vec += (d1 * d1_stride * (gridDim.z / head_ext));
-    vals_vec += (cnt * d1_stride);
-    vals_vec += (d2 * d2_stride);
-
-    // bias_vec += (cnt * d1_stride);
-    // bias_vec += (d2 * d2_stride);
-
-    // output_vec += (d0_stride * gridDim.x);
-    output_vec += (d1 * d2_stride);
-    // output_vec += (d0 * d0_stride);
-    output_vec += (d2 * d2_out_stride);
-
-    // bias_arr = bias_vec[d3];
-    vals_arr = vals_vec[d3];
-
-    output_half[0] = vals_half[0];  //+ bias_half[0];
-    output_half[1] = vals_half[1];  //+ bias_half[1];
-    output_half[2] = vals_half[2];  //+ bias_half[2];
-    output_half[3] = vals_half[3];  //+ bias_half[3];
-    output_vec[d3] = output_arr;
-}
-
-// [B S C*H] - > C * [B A S N]
-template <>
-void launch_transform_scale<float>(float* vals,
-                                   float* query,
-                                   float* kv_cache,
-                                   int batch_size,
-                                   int seq_length,
-                                   unsigned cur_tokens,
-                                   size_t value_offset,
-                                   unsigned hidden_dim,
-                                   int heads,
-                                   cudaStream_t stream,
-                                   int trans_count,
-                                   float norm_factor,
-                                   size_t max_token_length)
-{
-    hidden_dim >>= 2;
-    int head_ext = (hidden_dim - 1) / MAX_THREADS + 1;
-
-    dim3 block_dim(hidden_dim / heads, (heads / head_ext));
-    dim3 grid_dim(batch_size, seq_length, (trans_count * head_ext));
-
-    transform_scale<<<grid_dim, block_dim, 0, stream>>>(query,
-                                                        kv_cache,
-                                                        vals,
-                                                        hidden_dim,
-                                                        seq_length,
-                                                        cur_tokens,
-                                                        value_offset,
-                                                        heads,
-                                                        head_ext,
-                                                        norm_factor,
-                                                        max_token_length);
-}
-
-template <>
-void launch_transform_scale<__half>(__half* vals,
-                                    __half* query,
-                                    __half* kv_cache,
-                                    int batch_size,
-                                    int seq_length,
-                                    unsigned cur_tokens,
-                                    size_t value_offset,
-                                    unsigned hidden_dim,
-                                    int heads,
-                                    cudaStream_t stream,
-                                    int trans_count,
-                                    float norm_factor,
-                                    size_t max_token_length)
-{
-    hidden_dim >>= 3;
-    int head_ext = (hidden_dim - 1) / MAX_THREADS + 1;
-    dim3 block_dim(hidden_dim / heads, (heads / head_ext));
-    dim3 grid_dim(batch_size, seq_length, (trans_count * head_ext));
-    transform_scale<<<grid_dim, block_dim, 0, stream>>>(query,
-                                                        kv_cache,
-                                                        vals,
-                                                        hidden_dim,
-                                                        seq_length,
-                                                        cur_tokens,
-                                                        value_offset,
-                                                        heads,
-                                                        head_ext,
-                                                        norm_factor,
-                                                        max_token_length);
-}
+// only used to avoid compilation error due to lack of definition.
+#ifndef BF16_AVAILABLE
+using __nv_bfloat162 = __half2;
+#endif
 
 // Bias add
 
@@ -242,11 +81,12 @@ __global__ void bias_add_transform_0213(float* output,
 #define ATTN_H 3
 #define MAX_SEQ_LINE 10
 
-__global__ void bias_add_transform_0213(__half* output,  // q
-                                        __half* k_cache,
-                                        __half* v_cache,
-                                        const __half* vals,  // qkv
-                                        const __half* bias,
+template <typename T>
+__global__ void bias_add_transform_0213(T* output,  // q
+                                        T* k_cache,
+                                        T* v_cache,
+                                        const T* vals,  // qkv
+                                        const T* bias,
                                         int hidden_dim,
                                         int seq_length,
                                         unsigned seq_offset,
@@ -258,6 +98,8 @@ __global__ void bias_add_transform_0213(__half* output,  // q
                                         int head_ext,
                                         int max_out_tokens)
 {
+    using T2 =
+        typename std::conditional<std::is_same<T, __half>::value, __half2, __nv_bfloat162>::type;
     unsigned half_dim = (rotary_dim << 3) >> 1;
     int d0_stride = hidden_dim * seq_length;
     int d1_stride = hidden_dim;
@@ -275,8 +117,8 @@ __global__ void bias_add_transform_0213(__half* output,  // q
     float4 vals_arr;
     float4 output_arr;
 
-    __half2* vals_half = reinterpret_cast<__half2*>(&vals_arr);
-    __half2* output_half = reinterpret_cast<__half2*>(&output_arr);
+    T2* vals_half = reinterpret_cast<T2*>(&vals_arr);
+    T2* output_half = reinterpret_cast<T2*>(&output_arr);
 
     const float4* vals_vec = reinterpret_cast<const float4*>(vals);
     float4* output_vec =
@@ -296,17 +138,19 @@ __global__ void bias_add_transform_0213(__half* output,  // q
     int lane = d3 & 0x1f;
     if (cnt < 2 && rotary_dim > 0 && d3 < rotary_dim) {
         float4 q = vals_vec[d3];
-        __half2* q_h = reinterpret_cast<__half2*>(&q);
+        T2* q_h = reinterpret_cast<T2*>(&q);
         if (rotate_every_two) {
 #pragma unroll
             for (int o = 0; o < 4; o++) {
                 float inv_freq = (float)(((d3 << 2) + o) * 2) / (float)(rotary_dim << 3);
                 inv_freq = 1.0 / powf(10000.0, inv_freq) * (float)seq_id;
                 float q_data[2];
-                q_data[0] = (float)q_h[o].x;
-                q_data[1] = (float)q_h[o].y;
-                q_h[o].x = (__half)(-1.0 * q_data[1] * sinf(inv_freq) + q_data[0] * cosf(inv_freq));
-                q_h[o].y = (__half)(q_data[0] * sinf(inv_freq) + q_data[1] * cosf(inv_freq));
+                q_data[0] = conversion::to<float>(q_h[o].x);
+                q_data[1] = conversion::to<float>(q_h[o].y);
+                q_h[o].x = conversion::to<T>(-1.0 * q_data[1] * sinf(inv_freq) +
+                                             q_data[0] * cosf(inv_freq));
+                q_h[o].y =
+                    conversion::to<T>(q_data[0] * sinf(inv_freq) + q_data[1] * cosf(inv_freq));
             }
         }
         output_vec[d3] = q;
@@ -357,15 +201,15 @@ void launch_bias_add_transform_0213<float>(float* output,
 }
 
 template <typename T>
-void launch_bias_add_transform_0213(T* outputs,
-                                    T* vals,
-                                    T* vals1,
-                                    const T* vals2,
+void launch_bias_add_transform_0213(T* output,
+                                    T* k_cache,
+                                    T* v_cache,
+                                    const T* vals,
                                     const T* bias,
                                     int batch_size,
                                     int seq_length,
                                     unsigned seq_offset,
-                                    int seq_length1,
+                                    int all_tokens,
                                     int hidden_dim,
                                     int heads,
                                     int rotary_dim,
@@ -373,25 +217,7 @@ void launch_bias_add_transform_0213(T* outputs,
                                     bool rotate_every_two,
                                     cudaStream_t stream,
                                     int trans_count,
-                                    int max_out_tokens);
-template <>
-void launch_bias_add_transform_0213<__half>(__half* output,
-                                            __half* k_cache,
-                                            __half* v_cache,
-                                            const __half* vals,
-                                            const __half* bias,
-                                            int batch_size,
-                                            int seq_length,
-                                            unsigned seq_offset,
-                                            int all_tokens,
-                                            int hidden_dim,
-                                            int heads,
-                                            int rotary_dim,
-                                            bool rotate_half,
-                                            bool rotate_every_two,
-                                            cudaStream_t stream,
-                                            int trans_count,
-                                            int max_out_tokens)
+                                    int max_out_tokens)
 {
     hidden_dim >>= 3;
     int head_ext = 1;  // (hidden_dim - 1) / MAX_THREADS + 1;
@@ -414,6 +240,44 @@ void launch_bias_add_transform_0213<__half>(__half* output,
                                                                 max_out_tokens);
 }
 
+#ifdef BF16_AVAILABLE
+template void launch_bias_add_transform_0213(__nv_bfloat16* output,
+                                             __nv_bfloat16* k_cache,
+                                             __nv_bfloat16* v_cache,
+                                             const __nv_bfloat16* vals,
+                                             const __nv_bfloat16* bias,
+                                             int batch_size,
+                                             int seq_length,
+                                             unsigned seq_offset,
+                                             int all_tokens,
+                                             int hidden_dim,
+                                             int heads,
+                                             int rotary_dim,
+                                             bool rotate_half,
+                                             bool rotate_every_two,
+                                             cudaStream_t stream,
+                                             int trans_count,
+                                             int max_out_tokens);
+#endif
+
+template void launch_bias_add_transform_0213(__half* output,
+                                             __half* k_cache,
+                                             __half* v_cache,
+                                             const __half* vals,
+                                             const __half* bias,
+                                             int batch_size,
+                                             int seq_length,
+                                             unsigned seq_offset,
+                                             int all_tokens,
+                                             int hidden_dim,
+                                             int heads,
+                                             int rotary_dim,
+                                             bool rotate_half,
+                                             bool rotate_every_two,
+                                             cudaStream_t stream,
+                                             int trans_count,
+                                             int max_out_tokens);
+
 // Bias add
 
 __global__ void pad_add_transform_0213(float* output,
@@ -426,17 +290,20 @@ __global__ void pad_add_transform_0213(float* output,
 {
 }
 
-__global__ void pad_add_transform_0213(__half* output,
-                                       const __half* vals,
+template <typename T>
+__global__ void pad_add_transform_0213(T* output,
+                                       const T* vals,
                                        int hidden_dim,
                                        int seq_length,
                                        int padded_seq_len,
                                        int heads,
                                        int padded_head_size)
 {
+    using T2 =
+        typename std::conditional<std::is_same<T, __half>::value, __half2, __nv_bfloat162>::type;
     float4 ZERO;
-    const __half2 zero_h = __float2half2_rn(0.f);
-    __half2* ZERO_h = reinterpret_cast<__half2*>(&ZERO);
+    const T2 zero_h = conversion::to<T2>(0.f);
+    T2* ZERO_h = reinterpret_cast<T2*>(&ZERO);
 #pragma unroll
     for (int i = 0; i < 4; i++) ZERO_h[i] = zero_h;
 
@@ -469,17 +336,6 @@ __global__ void pad_add_transform_0213(__half* output,
         output_vec[d3] = ZERO;
 }
 
-template <typename T>
-void launch_pad_add_transform_0213(T* output,
-                                   const T* vals,
-                                   int batch_size,
-                                   int hidden_dim,
-                                   int seq_length,
-                                   int padded_seq_len,
-                                   int heads,
-                                   int padded_head_size,
-                                   cudaStream_t stream);
-
 // [B S C*H] - > C * [B A S N]
 template <>
 void launch_pad_add_transform_0213<float>(float* output,
@@ -493,16 +349,17 @@ void launch_pad_add_transform_0213<float>(float* output,
                                           cudaStream_t stream)
 {
 }
-template <>
-void launch_pad_add_transform_0213<__half>(__half* output,
-                                           const __half* vals,
-                                           int batch_size,
-                                           int hidden_dim,
-                                           int seq_length,
-                                           int padded_seq_len,
-                                           int heads,
-                                           int padded_head_size,
-                                           cudaStream_t stream)
+
+template <typename T>
+void launch_pad_add_transform_0213(T* output,
+                                   const T* vals,
+                                   int batch_size,
+                                   int hidden_dim,
+                                   int seq_length,
+                                   int padded_seq_len,
+                                   int heads,
+                                   int padded_head_size,
+                                   cudaStream_t stream)
 {
     hidden_dim >>= 3;
     dim3 block_dim((padded_head_size >> 3), heads, 2);
@@ -510,6 +367,28 @@ void launch_pad_add_transform_0213<__half>(__half* output,
     pad_add_transform_0213<<<grid_dim, block_dim, 0, stream>>>(
         output, vals, hidden_dim, seq_length, padded_seq_len, heads, padded_head_size >> 3);
 }
+
+#ifdef BF16_AVAILABLE
+template void launch_pad_add_transform_0213(__nv_bfloat16* output,
+                                            const __nv_bfloat16* vals,
+                                            int batch_size,
+                                            int hidden_dim,
+                                            int seq_length,
+                                            int padded_seq_len,
+                                            int heads,
+                                            int padded_head_size,
+                                            cudaStream_t stream);
+#endif
+
+template void launch_pad_add_transform_0213(__half* output,
+                                            const __half* vals,
+                                            int batch_size,
+                                            int hidden_dim,
+                                            int seq_length,
+                                            int padded_seq_len,
+                                            int heads,
+                                            int padded_head_size,
+                                            cudaStream_t stream);
 
 // Bias add
 template <typename T>
@@ -562,15 +441,17 @@ __global__ void bias_add_transform_0213<float>(float* output,
                d2 * d2_out_stride + d3] = outputs;
 }
 
-template <>
-__global__ void bias_add_transform_0213<__half>(__half* output,
-                                                const __half* vals,
-                                                const __half* bias,
-                                                int hidden_dim,
-                                                int seq_length,
-                                                int heads,
-                                                int head_ext)
+template <typename T>
+__global__ void bias_add_transform_0213(T* output,
+                                        const T* vals,
+                                        const T* bias,
+                                        int hidden_dim,
+                                        int seq_length,
+                                        int heads,
+                                        int head_ext)
 {
+    using T2 =
+        typename std::conditional<std::is_same<T, __half>::value, __half2, __nv_bfloat162>::type;
     int d0_stride = hidden_dim * seq_length;
     int d1_stride = hidden_dim;
     int d2_stride = hidden_dim / heads;
@@ -586,9 +467,9 @@ __global__ void bias_add_transform_0213<__half>(__half* output,
     float4 vals_arr;
     float4 bias_arr;
     float4 output_arr;
-    __half2* vals_half = reinterpret_cast<__half2*>(&vals_arr);
-    __half2* bias_half = reinterpret_cast<__half2*>(&bias_arr);
-    __half2* output_half = reinterpret_cast<__half2*>(&output_arr);
+    T2* vals_half = reinterpret_cast<T2*>(&vals_arr);
+    T2* bias_half = reinterpret_cast<T2*>(&bias_arr);
+    T2* output_half = reinterpret_cast<T2*>(&output_arr);
 
     const float4* vals_vec = reinterpret_cast<const float4*>(vals);
     const float4* bias_vec = reinterpret_cast<const float4*>(bias);
@@ -617,13 +498,16 @@ __global__ void bias_add_transform_0213<__half>(__half* output,
     output_vec[d3] = output_arr;
 }
 
-__global__ void bias_add_transform_0213_v2(__half* output,
-                                           const __half* vals,
-                                           const __half* bias,
+template <typename T>
+__global__ void bias_add_transform_0213_v2(T* output,
+                                           const T* vals,
+                                           const T* bias,
                                            int hidden_dim,
                                            int seq_length,
                                            int heads)
 {
+    using T2 =
+        typename std::conditional<std::is_same<T, __half>::value, __half2, __nv_bfloat162>::type;
     __shared__ float4 in_data[3072];
 
     int d0_stride = hidden_dim * seq_length;
@@ -645,9 +529,9 @@ __global__ void bias_add_transform_0213_v2(__half* output,
     float4 vals_arr[1];
     float4 bias_arr[1];
     float4 output_arr[1];
-    __half2* vals_half = reinterpret_cast<__half2*>(vals_arr);
-    __half2* bias_half = reinterpret_cast<__half2*>(bias_arr);
-    __half2* output_half = reinterpret_cast<__half2*>(output_arr);
+    T2* vals_half = reinterpret_cast<T2*>(vals_arr);
+    T2* bias_half = reinterpret_cast<T2*>(bias_arr);
+    T2* output_half = reinterpret_cast<T2*>(output_arr);
 
     const float4* vals_vec = reinterpret_cast<const float4*>(vals);
     const float4* bias_vec = reinterpret_cast<const float4*>(bias);
@@ -687,53 +571,21 @@ __global__ void bias_add_transform_0213_v2(__half* output,
     }
 }
 
-// [B S C*H] - > C * [B A S N]
-template <>
-void launch_bias_add_transform_0213<float>(float* output,
-                                           const float* vals,
-                                           const float* bias,
-                                           int batch_size,
-                                           int seq_length,
-                                           int hidden_dim,
-                                           int heads,
-                                           cudaStream_t stream,
-                                           int trans_count)
-{
-    hidden_dim >>= 2;
-    int head_ext = (hidden_dim - 1) / MAX_THREADS + 1;
+template __global__ void bias_add_transform_0213_v2(__half* output,
+                                                    const __half* vals,
+                                                    const __half* bias,
+                                                    int hidden_dim,
+                                                    int seq_length,
+                                                    int heads);
 
-    dim3 block_dim(hidden_dim / heads, (heads / head_ext));
-    dim3 grid_dim(batch_size, seq_length, (trans_count * head_ext));
-
-    bias_add_transform_0213<float><<<grid_dim, block_dim, 0, stream>>>(
-        output, vals, bias, hidden_dim, seq_length, heads, head_ext);
-}
-
-template <>
-void launch_bias_add_transform_0213<__half>(__half* output,
-                                            const __half* vals,
-                                            const __half* bias,
-                                            int batch_size,
-                                            int seq_length,
-                                            int hidden_dim,
-                                            int heads,
-                                            cudaStream_t stream,
-                                            int trans_count)
-{
-    hidden_dim >>= 3;
-    if (true) {  // (hidden_dim > 128 || hidden_dim < 16) {
-        int head_ext = (hidden_dim - 1) / MAX_THREADS + 1;
-        dim3 block_dim(hidden_dim / heads, (heads / head_ext));
-        dim3 grid_dim(batch_size, seq_length, (trans_count * head_ext));
-        bias_add_transform_0213<__half><<<grid_dim, block_dim, 0, stream>>>(
-            output, vals, bias, hidden_dim, seq_length, heads, head_ext);
-    } else {
-        dim3 block_dim(hidden_dim / heads, heads, trans_count);
-        dim3 grid_dim(batch_size, seq_length / 2);
-        bias_add_transform_0213_v2<<<grid_dim, block_dim, 0, stream>>>(
-            output, vals, bias, hidden_dim, seq_length, heads);
-    }
-}
+#ifdef BF16_AVAILABLE
+template __global__ void bias_add_transform_0213_v2(__nv_bfloat16* output,
+                                                    const __nv_bfloat16* vals,
+                                                    const __nv_bfloat16* bias,
+                                                    int hidden_dim,
+                                                    int seq_length,
+                                                    int heads);
+#endif
 
 template <typename T>
 __global__ void transform4d_0213(T* out,
@@ -776,13 +628,13 @@ __global__ void transform4d_0213<float>(float* out,
     }
 }
 
-template <>
-__global__ void transform4d_0213<__half>(__half* out,
-                                         const __half* in,
-                                         int heads,
-                                         int seq_length,
-                                         int hidden_dim,
-                                         int head_ext)
+template <typename T>
+__global__ void transform4d_0213(T* out,
+                                 const T* in,
+                                 int heads,
+                                 int seq_length,
+                                 int hidden_dim,
+                                 int head_ext)
 {
     int d0_stride = hidden_dim * (seq_length / head_ext);
     int d1_stride = hidden_dim;
@@ -810,11 +662,8 @@ __global__ void transform4d_0213<__half>(__half* out,
     out_vec[d3] = in_vec[d3];
 }
 
-__global__ void transform4d_0213_v2(__half* out,
-                                    const __half* in,
-                                    int heads,
-                                    int seq_length,
-                                    int hidden_dim)
+template <typename T>
+__global__ void transform4d_0213_v2(T* out, const T* in, int heads, int seq_length, int hidden_dim)
 {
     __shared__ float4 in_data[3072];
 
@@ -858,6 +707,20 @@ __global__ void transform4d_0213_v2(__half* out,
     }
 }
 
+#ifdef BF16_AVAILABLE
+template __global__ void transform4d_0213_v2(__nv_bfloat16* out,
+                                             const __nv_bfloat16* in,
+                                             int heads,
+                                             int seq_length,
+                                             int hidden_dim);
+#endif
+
+template __global__ void transform4d_0213_v2(__half* out,
+                                             const __half* in,
+                                             int heads,
+                                             int seq_length,
+                                             int hidden_dim);
+
 // 3 * [B A S N] - > [B S C*H]
 template <>
 void launch_transform4d_0213<float>(float* out,
@@ -876,20 +739,40 @@ void launch_transform4d_0213<float>(float* out,
         <<<grid_dims, block_dims, 0, stream>>>(out, in, heads, seq_length, hidden_dim, 1);
 }
 
-template <>
-void launch_transform4d_0213<__half>(__half* out,
-                                     const __half* in,
-                                     int batch_size,
-                                     int heads,
-                                     int seq_length,
-                                     int hidden_dim,
-                                     cudaStream_t stream,
-                                     int trans_count)
+template <typename T>
+void launch_transform4d_0213<T>(T* out,
+                                const T* in,
+                                int batch_size,
+                                int heads,
+                                int seq_length,
+                                int hidden_dim,
+                                cudaStream_t stream,
+                                int trans_count)
 {
     hidden_dim >>= 3;
     int head_ext = (hidden_dim - 1) / MAX_THREADS + 1;
     dim3 grid_dims(batch_size, trans_count, (seq_length * head_ext));
     dim3 block_dims(hidden_dim / heads, (heads / head_ext));
-    transform4d_0213<__half>
-        <<<grid_dims, block_dims, 0, stream>>>(out, in, heads, seq_length, hidden_dim, head_ext);
+    transform4d_0213<<<grid_dims, block_dims, 0, stream>>>(
+        out, in, heads, seq_length, hidden_dim, head_ext);
 }
+
+#ifdef BF16_AVAILABLE
+template void launch_transform4d_0213(__nv_bfloat16* out,
+                                      const __nv_bfloat16* in,
+                                      int batch_size,
+                                      int heads,
+                                      int seq_length,
+                                      int hidden_dim,
+                                      cudaStream_t stream,
+                                      int trans_count);
+#endif
+
+template void launch_transform4d_0213(__half* out,
+                                      const __half* in,
+                                      int batch_size,
+                                      int heads,
+                                      int seq_length,
+                                      int hidden_dim,
+                                      cudaStream_t stream,
+                                      int trans_count);

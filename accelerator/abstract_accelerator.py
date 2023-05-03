@@ -1,8 +1,14 @@
+# Copyright (c) Microsoft Corporation.
+# SPDX-License-Identifier: Apache-2.0
+
+# DeepSpeed Team
+
 import abc
 from abc import ABC
 
 
 class DeepSpeedAccelerator(ABC):
+
     def __init__(self):
         self._name = None
         self._communication_backend_name = None
@@ -66,12 +72,9 @@ class DeepSpeedAccelerator(ABC):
         ...
 
     # Streams/Events
+    @property
     @abc.abstractmethod
-    def Stream(self, device=None, priority=0, **kwargs):
-        ...
-
-    @abc.abstractmethod
-    def StreamContext(self, stream):
+    def Stream(self):
         ...
 
     @abc.abstractmethod
@@ -86,8 +89,9 @@ class DeepSpeedAccelerator(ABC):
     def default_stream(self, device_index=None):
         ...
 
+    @property
     @abc.abstractmethod
-    def Event(self, **kwargs):
+    def Event(self):
         ...
 
     # Memory management
@@ -221,8 +225,14 @@ class DeepSpeedAccelerator(ABC):
     def op_builder_dir(self):
         ...
 
+    # create an instance of op builder, specified by class_name
     @abc.abstractmethod
     def create_op_builder(self, class_name):
+        ...
+
+    # return an op builder class, specified by class_name
+    @abc.abstractmethod
+    def get_op_builder(self, class_name):
         ...
 
     @abc.abstractmethod

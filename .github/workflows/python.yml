@@ -3,11 +3,12 @@ name: python
 on:
   push:
     branches:
-      - 'master'
       - 'staging**'
   pull_request:
     branches:
       '**'
+  schedule:
+    - cron: "0 0 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
