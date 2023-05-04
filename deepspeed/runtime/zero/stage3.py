@@ -165,20 +165,6 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
             self._set_zero_group_parallelism()
             zpg = groups._get_zero_param_intra_parallel_group()
 
-        self.parameter_offload = DeepSpeedZeRoOffload(
-            module=module,
-            timers=timers,
-            ds_config=ds_config,
-            overlap_comm=overlap_comm,
-            prefetch_bucket_size=prefetch_bucket_size,
-            max_reuse_distance=max_reuse_distance,
-            max_live_parameters=max_live_parameters,
-            param_persistence_threshold=param_persistence_threshold,
-            model_persistence_threshold=model_persistence_threshold,
-            offload_param_config=offload_optimizer_config,
-            mpu=mpu,
-            zero_param_parallel_group=zpg,
-            zero_quantized_weights=zero_quantized_weights)
         self.parameter_offload = self.initialize_ds_offload(module=module,
                                                             timers=timers,
                                                             ds_config=ds_config,
