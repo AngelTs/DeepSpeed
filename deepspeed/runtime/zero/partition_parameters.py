@@ -1520,6 +1520,51 @@ class Init(InsertPostInitMethodToModuleSubClasses):
 
             print_rank_0(f"ID {param.ds_id} partitioned type {param.dtype} dev {param.device} shape {param.shape}")
 
+    @instrument_w_nvtx
+    def _partition_param_sec(self, param, buffer=None, has_been_updated=False):
+        assert param.ds_status is not ZeroParamStatus.INFLIGHT, f" {param} Cannot partition a param in flight"
+        global reuse_buffers
+        #print_rank_0(f"SAGE SEC MON Param id {param.ds_id} status is {param.ds_status}", force=True)
+        if param.ds_status is ZeroParamStatus.AVAILABLE:
+            if param.ds_secondary_tensor is not None and not has_been_updated:  ##param already partitioned
+                ###Not used fix
+                if param.ds_secondary_tensor.final_location == OffloadDeviceEnum.nvme:
+                    print_rank_0(
+                        f"Param {param.ds_id} {param.ds_tensor.shape} partition released since it exists in nvme",
+                        force=False)
+                    param.nvme_swapper.remove_partition_and_release_buffers(
+                        [param])  ###Add ds_secondary_tensor in this function
+                    print_rank_0(
+                        f"swap Param {param.ds_id} {param.ds_tensor.shape} partition released since it exists in nvme",
+                        force=False)
+
+                return
+
+            tensor_size = self._aligned_size(param)
+            partition_size = tensor_size // self.world_size
+
+            secondary_partition_size = int(
+                tensor_size // self.num_ranks_in_param_group)  ##SAGE group size
+            if param.ds_secondary_tensor is None:  ##assumption, invalid primary assumes invalid secondary, here create both!!!
+                #print_rank_0(f"SAGE SEC TENSOR is NONE",  force=True)  ##This is forward
+                final_location = None
+                if self.remote_device == OffloadDeviceEnum.nvme and self.param_swapper.swappable_tensor(
+                        numel=partition_size):
+                    final_location = OffloadDeviceEnum.nvme
+
+                    secondary_buffer = self.param_swapper.get_buffer(
+                        param,
+                        secondary_partition_size)
+                    secondary_partitioned_tensor = torch.empty(
+                        0,
+                        dtype=param.dtype,
+                        device=secondary_buffer.device)
+                    secondary_partitioned_tensor.data = secondary_buffer.data
+                    ##SAGE end sec part
+                    print_rank_0(
+                        f"ID {param.ds_id} Initializing partition for the first time for nvme offload."
+                    )
+
                 else:
                     secondary_partitioned_tensor = torch.empty(
                         secondary_partition_size,
@@ -1600,6 +1645,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 f"{param.ds_id} partitioned type {param.dtype} dev {param.device} shape {param.shape}",
                 force=False)
 
+   
     def _param_status(self, param):
         if param.ds_tensor is not None:
             print_rank_0(
