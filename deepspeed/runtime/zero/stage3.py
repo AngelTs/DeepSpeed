@@ -79,7 +79,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
     For usage examples, refer to TODO: DeepSpeed Tutorial
 
     """
-
+    '''
     def __init__(self,
                  module,
                  init_optimizer,
@@ -113,7 +113,41 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                  aio_config=None,
                  zero_param_group_size=1,
                  zero_quantized_weights=False):
-
+    '''
+    def __init__(self,
+                 module,
+                 init_optimizer,
+                 timers,
+                 ds_config,
+                 static_loss_scale=1.0,
+                 dynamic_loss_scale=False,
+                 dynamic_loss_args=None,
+                 verbose=True,
+                 contiguous_gradients=True,
+                 reduce_bucket_size=500000000,
+                 prefetch_bucket_size=50000000,
+                 max_reuse_distance=1000000000,
+                 max_live_parameters=1000000000,
+                 param_persistence_threshold=100000,
+                 model_persistence_threshold=sys.maxsize,
+                 dp_process_group=None,
+                 all2all_process_group=None,
+                 reduce_scatter=True,
+                 overlap_comm=False,
+                 offload_optimizer_config=None,
+                 offload_param_config=None,
+                 sub_group_size=1000000000000,
+                 mpu=None,
+                 clip_grad=0.0,
+                 communication_data_type=torch.float16,
+                 postscale_gradients=True,
+                 gradient_predivide_factor=1.0,
+                 gradient_accumulation_steps=1,
+                 elastic_checkpoint=False,
+                 aio_config=None,
+                 zero_param_group_size=1,
+                 zero_quantized_weights=False):
+        print("DEBUG zeropp params", zero_param_group_size, zero_quantized_weights)
         see_memory_usage("Stage 3 initialize beginning", force=True)
 
         print_rank_0(f"initialized {__class__.__name__} with args: {locals()}", force=False)
@@ -176,7 +210,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                                                             model_persistence_threshold=model_persistence_threshold,
                                                             offload_optimizer_config=offload_optimizer_config,
                                                             mpu=mpu,
-                                                            #zero_param_parallel_group=zpg,
+                                                            zpg=zpg,
                                                             zero_quantized_weights=zero_quantized_weights),
 
         self.persistent_parameters = self.parameter_offload.persistent_parameters
@@ -381,7 +415,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         model_persistence_threshold,
         offload_optimizer_config,
         mpu,
-        #zpg,
+        zpg,
         zero_quantized_weights,
     ):
         return DeepSpeedZeRoOffload(module=module,
@@ -395,7 +429,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                                     model_persistence_threshold=model_persistence_threshold,
                                     offload_param_config=offload_optimizer_config,
                                     mpu=mpu,
-                                    #zero_param_parallel_group=zpg,
+                                    zero_param_parallel_group=zpg,
                                     zero_quantized_weights=zero_quantized_weights)
 
     def _get_trainable_parameter_groups(self):

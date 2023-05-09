@@ -1475,6 +1475,7 @@ class DeepSpeedEngine(Module):
                     return self._return_mics_optimizer(optimizer, timers)
 
                 log_dist(f'Creating {model_dtype} ZeRO stage {zero_stage} optimizer', ranks=[0])
+                print("DEBUG ENGINE ", self.zero_param_group_size(), self.zero_quantized_weights())
                 from deepspeed.runtime.zero.stage3 import DeepSpeedZeroOptimizer_Stage3
                 optimizer = DeepSpeedZeroOptimizer_Stage3(
                     self.module,
