@@ -554,14 +554,14 @@ class AllGatherCoalescedHandle:
         forward: bool,
         quantization=None,
     ) -> None:
-        self.__allgather_handle = allgather_handle
-        self.__params = params
-        self.__partitions = partitions
-        self.__world_size = world_size
-        self.__use_secondary_tensor = use_secondary_tensor
-        self.__forward = forward
-        self.__complete = False
-        self.__quantization = quantization
+        self.allgather_handle = allgather_handle
+        self.params = params
+        self.partitions = partitions
+        self.world_size = world_size
+        self.use_secondary_tensor = use_secondary_tensor
+        self.forward = forward
+        self.complete = False
+        self.quantization = quantization
 
         for param in self.params:
             if param.ds_status != ZeroParamStatus.INFLIGHT:
@@ -574,18 +574,18 @@ class AllGatherCoalescedHandle:
 
         instrument_w_nvtx(self.allgather_handle.wait)()
 
-        if self.__quantization:
-            instrument_w_nvtx(self.__quantization.quant_handle.wait)()
-            flat_tensor = self.__quantization.backend.dequantize(
-                self.__quantization.quantized_param,
-                self.__quantization.scale_buffer).to(self.__params[0].device)
+        if self.quantization:
+            instrument_w_nvtx(self.quantization.quant_handle.wait)()
+            flat_tensor = self.quantization.backend.dequantize(
+                self.quantization.quantized_param,
+                self.quantization.scale_buffer).to(self.params[0].device)
 
-            self.__partitions: List[Parameter] = []
-            for i in range(self.__quantization.world_size):
-                self.__partitions.append(
+            self.partitions: List[Parameter] = []
+            for i in range(self.quantization.world_size):
+                self.partitions.append(
                     flat_tensor.narrow(0,
-                                       self.__quantization.partition_sz * i,
-                                       self.__quantization.partition_sz))
+                                       self.quantization.partition_sz * i,
+                                       self.quantization.partition_sz))
 
         # split the single tensor out into individual tensors
         param_offset = 0
@@ -593,12 +593,12 @@ class AllGatherCoalescedHandle:
             assert param.ds_status == ZeroParamStatus.INFLIGHT, f"expected param {param.ds_summary()} to be inflight"
             partitions: List[Tensor] = []
             ds_tensor_numel = param.ds_tensor.ds_numel
-            if self.__use_secondary_tensor and not self.__forward:
+            if self.use_secondary_tensor and not self.forward:
                 ds_tensor_numel *= param.ds_secondary_tensor_num_of_groups
-            for rank in range(self.__world_size):
+            for rank in range(self.world_size):
                 param_start = rank * ds_tensor_numel
                 if param_start < param.ds_numel:
-                    part_to_copy = self.__partitions[rank].narrow(
+                    part_to_copy = self.partitions[rank].narrow(
                         0,
                         param_offset,
                         min(param.ds_numel - param_start,
