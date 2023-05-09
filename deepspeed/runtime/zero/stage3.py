@@ -211,7 +211,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                                                             offload_optimizer_config=offload_optimizer_config,
                                                             mpu=mpu,
                                                             zpg=zpg,
-                                                            zero_quantized_weights=zero_quantized_weights),
+                                                            zero_quantized_weights=zero_quantized_weights)
 
         self.persistent_parameters = self.parameter_offload.persistent_parameters
         self._configure_offloading(offload_optimizer_config, offload_param_config)
