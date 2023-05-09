@@ -1089,7 +1089,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     param.data = param_buffer.narrow(0,
                                                      0,
                                                      param.ds_numel).view(
-                                                         param.ds_shape).to(param.device)
+                                                     param.ds_shape).to(param.device)
                     return AllGatherHandle(handles, param)
                 else:
                     param_buffer = torch.empty(
@@ -1147,7 +1147,6 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                               device=torch.cuda.current_device(),
                                               requires_grad=False)
                     partitions: List[Parameter] = []
-                    #print_rank_0(f"SAGE ALLGCoal forward? {forward} secondary T {param.ds_secondary_tensor}", force=True)
                     for i in range(world_size):
                         partitions.append(
                             flat_tensor.narrow(0,
@@ -1155,7 +1154,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                                                partition_sz))
 
                     if self.zero_param_process_group and not forward:
-                        instrument_w_nvtx(torch.cat)([        p.ds_secondary_tensor.to(get_accelerator().current_device_name())
+                        instrument_w_nvtx(torch.cat)([p.ds_secondary_tensor.to(get_accelerator().current_device_name())
                             for p in params
                         ],
                                                                               out=partitions[rank_in_group])
@@ -1172,8 +1171,8 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                     instrument_w_nvtx(torch.cat)(partition_list,
                                              out=partitions[rank_in_group()])
                     '''
-                    handle = _dist_allgather_fn(partitions[get_partition_rank_in_group()],     flat_tensor,
-                                                get_partition_dp_group(params[0]))
+                    handle = _dist_allgather_fn(partitions[rank_in_group], flat_tensor,ds_process_group)
+                    #Fix get_partition_dp_group(params[0]))
 
                     return AllGatherCoalescedHandle(
                         allgather_handle=handle,
