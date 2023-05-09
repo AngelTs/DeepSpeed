@@ -160,7 +160,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         self.zero_param_group_size = zero_param_group_size
 
         zpg = groups._get_zero_param_intra_parallel_group()
-        print_rank_0(f"STAGE3 ZPG {self.zero_param_group_size} {zpg}", force=True)
+        print_rank_0(f"STAGE3 ZPG {self.zero_param_group_size} {zpg}", force=False)
         if self.zero_param_group_size > 1 and zpg is None:
             self._set_zero_group_parallelism()
             zpg = groups._get_zero_param_intra_parallel_group()
@@ -176,7 +176,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                                                             model_persistence_threshold=model_persistence_threshold,
                                                             offload_optimizer_config=offload_optimizer_config,
                                                             mpu=mpu,
-                                                            zero_param_parallel_group=zpg,
+                                                            #zero_param_parallel_group=zpg,
                                                             zero_quantized_weights=zero_quantized_weights),
 
         self.persistent_parameters = self.parameter_offload.persistent_parameters
@@ -381,7 +381,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
         model_persistence_threshold,
         offload_optimizer_config,
         mpu,
-        zpg,
+        #zpg,
         zero_quantized_weights,
     ):
         return DeepSpeedZeRoOffload(module=module,
@@ -395,7 +395,7 @@ class DeepSpeedZeroOptimizer_Stage3(ZeROOptimizer):
                                     model_persistence_threshold=model_persistence_threshold,
                                     offload_param_config=offload_optimizer_config,
                                     mpu=mpu,
-                                    zero_param_parallel_group=zpg,
+                                    #zero_param_parallel_group=zpg,
                                     zero_quantized_weights=zero_quantized_weights)
 
     def _get_trainable_parameter_groups(self):

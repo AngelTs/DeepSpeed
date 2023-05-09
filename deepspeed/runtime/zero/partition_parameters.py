@@ -832,7 +832,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
         self.zero_param_process_group = zero_param_parallel_group
 
         self.use_secondary_tensor = False
-        self.num_ranks_in_param_group = self.world_size
+        self.num_ranks_in_param_group = self.dp_world_size
         self.rank_in_group = self.rank
         self.num_param_groups = 1
 
@@ -841,7 +841,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
         if self.zero_param_process_group is not None:
             self.num_ranks_in_param_group = groups._get_zero_param_intra_parallel_group_world_size(
             )  # of ranks within a parameter (intra) group
-            self.num_param_groups = int(self.world_size / self.num_ranks_in_param_group)
+            self.num_param_groups = int(self.dp_world_size / self.num_ranks_in_param_group)
             self.rank_in_group = groups._get_zero_param_intra_parallel_rank_in_mygroup(
             )  #use rank in groups
             ##TODO: check that MPU is not set
@@ -1023,7 +1023,7 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             #use appropriate all gather process group
             ds_process_group = self.ds_process_group
             rank_in_group = self.rank
-            world_size = self.world_size
+            world_size = self.dp_world_size
             use_secondary_tensor = False
             #if self.use_secondary_tensor and not forward:
             if self.zero_param_process_group and not forward:
@@ -1447,10 +1447,8 @@ class Init(InsertPostInitMethodToModuleSubClasses):
             tensor_size = self._aligned_size(param)
             partition_size = tensor_size // self.num_partitions
 
-            #secondary_partition_size = math.floor(tensor_size // self.num_ranks_in_param_group) ##SAGE group size
-            #secondary_partition_size = partition_size*(self.world_size // self.num_ranks_in_param_group)
-            if param.ds_tensor is None:  ##assumption, invalid primary assumes invalid secondary, here create both!!!
-                #print_rank_0(f"SAGE SAT is NONE forward? {not backward}",  force=True)  ##This is forward
+            
+            if param.ds_tensor is None:  
                 final_location = None
                 if self.remote_device == OffloadDeviceEnum.nvme and self.param_swapper.swappable_tensor(
                         numel=partition_size):
@@ -1541,12 +1539,11 @@ class Init(InsertPostInitMethodToModuleSubClasses):
                 return
 
             tensor_size = self._aligned_size(param)
-            partition_size = tensor_size // self.world_size
+            partition_size = tensor_size // self.dp_world_size
 
             secondary_partition_size = int(
-                tensor_size // self.num_ranks_in_param_group)  ##SAGE group size
-            if param.ds_secondary_tensor is None:  ##assumption, invalid primary assumes invalid secondary, here create both!!!
-                #print_rank_0(f"SAGE SEC TENSOR is NONE",  force=True)  ##This is forward
+                tensor_size // self.num_ranks_in_param_group)  
+            if param.ds_secondary_tensor is None:  
                 final_location = None
                 if self.remote_device == OffloadDeviceEnum.nvme and self.param_swapper.swappable_tensor(
                         numel=partition_size):
