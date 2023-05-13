@@ -5,7 +5,7 @@
 """
     DeepSpeed Communication Package: deepspeed.comm
     deepspeed.comm
-        -- import and use deepspeed.ops.comm
+        -- import and use deepspeeed.ops.comm
         -- use torch.distributed directly if both this package and torch.distributed use the same NCCL version
         -- use custom collectives
             -- can either use torch.dist or ds.ops.comm?
@@ -559,7 +559,7 @@ def get_global_rank(group=None, group_rank=0):
 
 
 # Main DeepSpeed Comms. public API.
-def init_distributed(dist_backend=None,
+def init_distributed(dist_backend='gloo',
                      auto_mpi_discovery=True,
                      distributed_port=TORCH_DISTRIBUTED_DEFAULT_PORT,
                      verbose=True,
